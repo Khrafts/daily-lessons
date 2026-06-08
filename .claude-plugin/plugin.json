@@ -1,0 +1,22 @@
+{
+  "name": "daily-lesson",
+  "description": "Mines your recent Claude Code sessions and teaches you one concept you relied on but probably don't fully understand — rendered as a self-contained, interactive HTML lesson. Runs entirely locally; nothing leaves your machine.",
+  "version": "0.1.0",
+  "author": {
+    "name": "khrafts",
+    "email": "uwusebauyoyou@gmail.com",
+    "url": "https://github.com/Khrafts"
+  },
+  "homepage": "https://github.com/Khrafts/daily-lessons",
+  "repository": "https://github.com/Khrafts/daily-lessons",
+  "license": "MIT",
+  "keywords": [
+    "learning",
+    "education",
+    "tutor",
+    "self-improvement",
+    "html",
+    "claude-code",
+    "productivity"
+  ]
+}

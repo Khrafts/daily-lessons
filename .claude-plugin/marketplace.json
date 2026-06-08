@@ -1,0 +1,21 @@
+{
+  "name": "daily-lessons",
+  "owner": {
+    "name": "khrafts",
+    "url": "https://github.com/Khrafts"
+  },
+  "metadata": {
+    "description": "A personal teacher for Claude Code — learns from your own sessions and teaches you back.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "daily-lesson",
+      "source": "./",
+      "description": "Scan recent Claude Code sessions and teach you one thing you relied on but probably don't fully understand. Renders an interactive HTML lesson. Fully local.",
+      "version": "0.1.0",
+      "category": "productivity",
+      "keywords": ["learning", "education", "tutor"]
+    }
+  ]
+}
