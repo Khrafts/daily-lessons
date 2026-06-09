@@ -6,3 +6,6 @@
 *~
 .idea/
 .vscode/
+
+# PR-reviewer eval scratch (regenerable via setup_fixtures.py; not part of the plugin)
+.claude/skills/daily-lessons-pr-reviewer-workspace/
