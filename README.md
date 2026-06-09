@@ -40,7 +40,7 @@ file — then offers to open it in your browser.
 
 - **One concept per run**, chosen from things you *used but treated as a black box* — a copied command, a config you didn't question, a spot where you trial-and-errored.
 - **Pitched at your stack.** It infers your languages, frameworks, and domain from the sessions themselves, so the worked example is in *your* world (Solidity, Rust, TypeScript, Go, Python — whatever you actually work in).
-- **An interactive HTML lesson** — copy-able code blocks, collapsible pitfalls, reveal-on-click self-check questions, Fraunces + JetBrains Mono typography.
+- **An interactive HTML lesson** — copy-able code blocks, collapsible pitfalls, reveal-on-click self-check questions, Fraunces + JetBrains Mono typography. Rendered from a **frozen canonical template**, so the design is identical on every install.
 - **A growing library** at `~/.claude/daily-lessons/index.html`, newest first.
 
 Each lesson covers: what it is → why it mattered in *your* session → the mental
@@ -64,9 +64,38 @@ something new and the same-day re-run lands on a different concept.
 
 ---
 
+## Customizing the look
+
+Every lesson is rendered from **frozen templates** bundled in the plugin, so the
+typography, layout, and interactions are identical on every install — the design
+is canon, not re-improvised each run:
+
+```
+assets/lesson-shell.html     # lesson page: <head>, CSS, JS, metadata bar, footer
+assets/library-shell.html    # the library landing page
+assets/library-row.html      # one library row
+scripts/render_lesson.py     # slots your content into the shells (token replacement)
+references/lesson-format.md  # the body component contract the command follows
+```
+
+The command authors only the *content* (a metadata blob + the article body) and
+hands it to `render_lesson.py`, which assembles the page. Want a different look?
+Edit the `assets/` shells — that's the whole point of the split. After editing,
+re-skin the existing library with:
+
+```
+python3 scripts/render_lesson.py --rebuild-library
+```
+
+(Existing lesson *pages* are written once at creation; re-render them to re-skin
+those too.)
+
+---
+
 ## Requirements
 
 - Claude Code with plugin support.
+- `python3` (3.8+) — runs the renderer. Pre-installed on macOS and most Linux distros.
 - A shell with `jq` available (used to parse the `.jsonl` transcripts). Pre-installed on most setups; on macOS, `brew install jq`.
 - Some actual Claude Code history to learn from. Fresh installs with no sessions yet will be told there's nothing to teach.
 

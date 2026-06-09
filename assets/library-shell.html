@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Daily Lessons — Library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#111;--paper:#fff;--muted:#6b6b6b;--line:#e6e6e6;--max:48rem}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:Fraunces,"Iowan Old Style",Georgia,serif;font-size:19px;line-height:1.6}
+  .wrap{max-width:var(--max);margin:0 auto;padding:4rem 1.4rem 6rem}
+  .kicker{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 .8rem}
+  h1{font-weight:600;font-size:3rem;line-height:1.04;letter-spacing:-.02em;margin:0 0 .5rem}
+  .count{font-family:"JetBrains Mono",monospace;font-size:.82rem;color:var(--muted);letter-spacing:.04em;margin:0 0 3rem}
+  ul.list{list-style:none;margin:0;padding:0}
+  li.row{border-top:1px solid var(--line);padding:1.6rem 0}
+  li.row:last-child{border-bottom:1px solid var(--line)}
+  a.title{display:block;text-decoration:none;color:var(--ink)}
+  a.title:hover h2{text-decoration:underline;text-underline-offset:3px}
+  .row .topline{display:flex;gap:.9rem;align-items:baseline;font-family:"JetBrains Mono",monospace;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:.5rem}
+  .row .topline .num{color:var(--ink);font-weight:700}
+  h2{font-weight:600;font-size:1.5rem;line-height:1.18;letter-spacing:-.012em;margin:0 0 .45rem}
+  .one{color:#444;font-size:1.02rem;margin:0 0 .7rem}
+  .tags{display:flex;flex-wrap:wrap;gap:.4rem}
+  .tag{font-family:"JetBrains Mono",monospace;font-size:.64rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);border-radius:999px;padding:.1rem .55rem;color:var(--muted)}
+  .foot{font-family:"JetBrains Mono",monospace;font-size:.72rem;color:var(--muted);letter-spacing:.06em;margin-top:3.5rem;text-align:center}
+  ::selection{background:#111;color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="kicker">Claude Code · self-taught</p>
+  <h1>Daily Lessons</h1>
+  <p class="count">{{COUNT_LINE}}</p>
+
+  <ul class="list">
+
+{{ROWS}}
+
+  </ul>
+
+  <p class="foot">one concept per run · depth over breadth</p>
+</div>
+</body>
+</html>

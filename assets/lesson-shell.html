@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>#{{N}} · {{TITLE}}</title>
+
+<!-- Fonts (progressive enhancement; system fallbacks below) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<!-- Optional highlighter; page reads fine if this never loads -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+
+<style>
+  :root{
+    --ink:#111;
+    --paper:#fff;
+    --muted:#6b6b6b;
+    --line:#e6e6e6;
+    --line-strong:#111;
+    --code-bg:#fafafa;
+    --accent:#111;
+    --max:46rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:Fraunces,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    font-optical-sizing:auto;
+    font-size:19px;
+    line-height:1.65;
+    letter-spacing:.002em;
+  }
+  .wrap{max-width:var(--max);margin:0 auto;padding:3.2rem 1.4rem 6rem}
+
+  /* ---- top bar ---- */
+  .topnav{max-width:var(--max);margin:0 auto;padding:1.1rem 1.4rem 0;display:flex;justify-content:space-between;align-items:baseline;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
+  .topnav a{color:var(--muted);text-decoration:none;border-bottom:1px solid transparent;transition:border-color .15s,color .15s}
+  .topnav a:hover{color:var(--ink);border-color:var(--ink)}
+
+  .meta{
+    display:flex;flex-wrap:wrap;gap:.5rem 1.1rem;align-items:center;
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.72rem;letter-spacing:.06em;color:var(--muted);text-transform:uppercase;
+    border-top:1.5px solid var(--line-strong);border-bottom:1px solid var(--line);
+    padding:.85rem 0;margin:0 0 2.4rem;
+  }
+  .meta .n{color:var(--ink);font-weight:700}
+  .tag{border:1px solid var(--line);border-radius:999px;padding:.12rem .6rem;color:var(--ink)}
+
+  h1{
+    font-weight:600;font-size:2.55rem;line-height:1.08;letter-spacing:-.018em;
+    margin:.2rem 0 .6rem;
+  }
+  .dek{font-size:1.18rem;color:var(--muted);font-style:italic;margin:0 0 2.6rem;line-height:1.5}
+
+  h2{
+    font-weight:600;font-size:1.06rem;letter-spacing:.02em;text-transform:uppercase;
+    font-family:"JetBrains Mono",ui-monospace,monospace;
+    margin:3.1rem 0 .2rem;padding-bottom:.5rem;border-bottom:1px solid var(--line);
+    display:flex;gap:.7rem;align-items:baseline;
+  }
+  h2 .h2n{color:var(--muted);font-weight:400;font-size:.85rem}
+  h3{font-weight:600;font-size:1.2rem;margin:1.9rem 0 .3rem;letter-spacing:-.01em}
+
+  p{margin:1rem 0}
+  strong{font-weight:600}
+  em{font-style:italic}
+  a{color:var(--ink);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+
+  .lead{font-size:1.06rem}
+
+  ul,ol{margin:1rem 0;padding-left:1.3rem}
+  li{margin:.5rem 0}
+
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82em;background:var(--code-bg);border:1px solid var(--line);border-radius:4px;padding:.05em .35em}
+
+  /* code blocks */
+  figure.code{margin:1.5rem 0;border:1.5px solid var(--ink);border-radius:8px;overflow:hidden;background:var(--code-bg)}
+  figure.code figcaption{
+    display:flex;justify-content:space-between;align-items:center;
+    font-family:"JetBrains Mono",monospace;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);background:#fff;border-bottom:1px solid var(--line);padding:.45rem .8rem;
+  }
+  figure.code pre{margin:0;padding:1rem 1.05rem;overflow-x:auto}
+  figure.code pre code{background:none;border:none;padding:0;font-size:.78rem;line-height:1.62;display:block;white-space:pre}
+  .copy{
+    font-family:"JetBrains Mono",monospace;font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;
+    cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted);
+    border-radius:5px;padding:.25rem .55rem;transition:all .14s;
+  }
+  .copy:hover{border-color:var(--ink);color:var(--ink)}
+  .copy.ok{border-color:var(--ink);color:var(--ink)}
+
+  blockquote{margin:1.6rem 0;padding:.4rem 0 .4rem 1.2rem;border-left:3px solid var(--ink);color:#333;font-style:italic}
+
+  /* pitfalls */
+  details.pit{border:1px solid var(--line);border-radius:8px;margin:.8rem 0;background:#fff;overflow:hidden}
+  details.pit+details.pit{margin-top:.55rem}
+  details.pit summary{
+    cursor:pointer;list-style:none;padding:.85rem 1rem;font-weight:600;font-size:1rem;
+    display:flex;gap:.7rem;align-items:flex-start;
+  }
+  details.pit summary::-webkit-details-marker{display:none}
+  details.pit summary .chev{font-family:"JetBrains Mono",monospace;color:var(--muted);transition:transform .18s;flex:none;margin-top:.05em}
+  details.pit[open] summary .chev{transform:rotate(90deg)}
+  details.pit summary .pl{font-family:"JetBrains Mono",monospace;font-size:.7rem;color:var(--muted);flex:none;margin-top:.18em}
+  details.pit .body{padding:0 1rem 1rem 2.55rem;color:#2a2a2a;font-size:.98rem}
+
+  /* self-check cards */
+  .checks{display:grid;gap:.8rem;margin:1.2rem 0}
+  .card{
+    border:1.5px solid var(--ink);border-radius:10px;background:#fff;cursor:pointer;
+    padding:1.05rem 1.1rem;transition:background .15s;
+  }
+  .card:hover{background:#fafafa}
+  .card .q{font-weight:600;display:flex;gap:.7rem;align-items:flex-start}
+  .card .q .qn{font-family:"JetBrains Mono",monospace;font-size:.74rem;color:var(--muted);flex:none;margin-top:.18em}
+  .card .a{
+    max-height:0;overflow:hidden;opacity:0;transition:max-height .3s ease,opacity .25s,margin .3s;
+    font-size:.95rem;color:#2a2a2a;border-top:1px dashed var(--line);margin-top:0;
+  }
+  .card.open .a{max-height:40rem;opacity:1;margin-top:.85rem;padding-top:.85rem}
+  .card .reveal{font-family:"JetBrains Mono",monospace;font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-top:.7rem}
+  .card.open .reveal{display:none}
+
+  hr{border:none;border-top:1px solid var(--line);margin:3rem 0}
+  .foot{font-family:"JetBrains Mono",monospace;font-size:.72rem;color:var(--muted);text-align:center;letter-spacing:.06em;margin-top:3.5rem}
+  .foot a{color:var(--muted)}
+  ::selection{background:#111;color:#fff}
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="../index.html">&larr; Library</a>
+  <span>Daily Lesson</span>
+</nav>
+
+<div class="wrap">
+
+  <div class="meta">
+    <span class="n">#{{N}}</span>
+    <span>Taught&nbsp;{{TAUGHT_DATE}}</span>
+    <span>Source&nbsp;day&nbsp;{{SOURCE_DAY}}</span>
+{{TAGS}}
+  </div>
+
+  <h1>{{TITLE}}</h1>
+  <p class="dek">{{DEK}}</p>
+
+{{BODY}}
+
+  <hr/>
+  <p class="foot">Lesson #{{N}} · mined from your {{SOURCE_DAY}} session · <a href="../index.html">back to the library &rarr;</a></p>
+
+</div>
+
+<!-- highlight.js: progressive enhancement only -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+(function(){
+  // Syntax highlight if the CDN loaded; otherwise the styled <pre> stands alone.
+  try{ if(window.hljs){ document.querySelectorAll('figure.code pre code').forEach(function(b){ try{hljs.highlightElement(b);}catch(e){} }); } }catch(e){}
+
+  // Copy buttons
+  document.querySelectorAll('figure.code').forEach(function(fig){
+    var btn = fig.querySelector('.copy');
+    var code = fig.querySelector('code');
+    if(!btn||!code) return;
+    btn.addEventListener('click', function(){
+      var text = code.innerText;
+      var done = function(){ btn.textContent='Copied'; btn.classList.add('ok'); setTimeout(function(){btn.textContent='Copy'; btn.classList.remove('ok');},1400); };
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done).catch(function(){fallback(text,done);});
+      } else { fallback(text,done); }
+    });
+  });
+  function fallback(text, done){
+    var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    try{document.execCommand('copy'); done();}catch(e){} document.body.removeChild(ta);
+  }
+
+  // Self-check reveal
+  document.querySelectorAll('.card').forEach(function(card){
+    card.addEventListener('click', function(){ card.classList.toggle('open'); });
+  });
+})();
+</script>
+</body>
+</html>

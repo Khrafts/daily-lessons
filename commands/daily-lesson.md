@@ -133,59 +133,52 @@ Cover, in order:
 
 ---
 
-## Step 5 — Render an interactive HTML lesson
+## Step 5 — Render the lesson through the canonical pipeline
 
-Write a **single self-contained** HTML file to
-`~/.claude/daily-lessons/lessons/YYYY-MM-DD-<slug>.html`. It must open directly
-via `file://` with no build step or local server.
+**Do not hand-write the HTML.** The entire look-and-feel — layout, CSS, fonts,
+the metadata bar, copy buttons, collapsible pitfalls, reveal-on-click self-check,
+and the library page — is frozen canon in the plugin's `assets/` shells and
+assembled by `scripts/render_lesson.py`. Authoring the page yourself would make
+every machine's output drift; the renderer guarantees it never does. Your job is
+the *content* only.
 
-Design:
-- Minimalist black-and-white aesthetic, generous whitespace, a comfortable
-  max-width reading column. **Fraunces** for headings, **JetBrains Mono** for
-  code (load via Google Fonts `<link>` with sensible system fallbacks).
-- A top metadata bar: lesson number (`#N`), today's date, the source session
-  day, and topic tags.
-- Syntax-highlighted code blocks, each with a **copy** button. You may pull a
-  highlighter from a CDN (e.g. highlight.js) but the page must still read fine
-  if the CDN is unreachable.
-- Make it *interactive*, not just styled: collapsible **Pitfalls** sections and
-  a flip-card or reveal-on-click **Self-check** so answers stay hidden until I
-  ask. A "← Library" link back to `index.html`.
+First read the component contract — it's short and exact:
+`${CLAUDE_PLUGIN_ROOT}/references/lesson-format.md`. Then:
 
-Implementation note: inline all CSS, and keep the page's runtime interactivity
-in **minimal vanilla browser JavaScript** — this is the single allowed JS
-exception, because a `file://` page can't run TypeScript without a build. The
-*teaching* code samples follow Step 4's language rule.
+1. Write **`/tmp/daily-lesson-meta.json`** — `title`, `dek` (the italic subtitle;
+   inline HTML like `<code>` is allowed), `one_liner`, `slug`, `concept_key`,
+   `source_day`, `taught_at`, `tags`. (`title` and `one_liner` are plain text —
+   the renderer HTML-escapes them.)
+2. Write **`/tmp/daily-lesson-body.html`** — the inner article only: the six
+   sections (`<h2><span class="h2n">01</span> …` through `06`) followed by the
+   `.checks` self-check. Use ONLY the canonical components from the reference:
+   `<figure class="code">` blocks (code at column 0, with `<`/`>`/`&` escaped and
+   `class="language-xxx"`), `<details class="pit">` pitfalls, `<blockquote>`, and
+   the self-check cards. No `<head>`, CSS, `<script>`, `<hr>`, or footer — the
+   shell owns all of that.
+3. Resolve the renderer and run it:
+   ```bash
+   RENDER="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/render_lesson.py}"
+   [ -f "$RENDER" ] || RENDER="$(find "$HOME/.claude/plugins/cache" -path '*daily-lesson*/scripts/render_lesson.py' 2>/dev/null | sort -V | tail -1)"
+   python3 "$RENDER" --meta /tmp/daily-lesson-meta.json --body /tmp/daily-lesson-body.html
+   ```
+   It writes `~/.claude/daily-lessons/lessons/<date>-<slug>.html`, appends the
+   ledger entry, and regenerates the library — deterministically — then prints
+   JSON `{ok, title, lesson_number, file, path, word_count}` for Step 7.
+
+Exit codes to handle: `0` ok · `2` bad/missing meta fields (fix, retry) · `3` the
+`concept_key` is already taught (go back to Step 2/3 and pick another) · `4`
+templates missing (the plugin install is broken — tell me).
 
 ---
 
-## Step 6 — Update the ledger and regenerate the library
+## Step 6 — (the renderer already did this)
 
-Append a record to `index.json`:
-
-```json
-{
-  "id": "2026-06-07-001",
-  "slug": "eip712-typed-data-signing",
-  "concept_key": "evm-eip712-typed-data",
-  "title": "EIP-712: Why Your Signatures Are Structured",
-  "one_liner": "Human-readable typed-data signing and how wallets verify it.",
-  "source_day": "2026-06-03",
-  "taught_at": "2026-06-07T09:14:00+01:00",
-  "tags": ["evm", "signatures", "security"],
-  "file": "lessons/2026-06-07-eip712-typed-data-signing.html",
-  "word_count": 940
-}
-```
-
-Keep `index.json` as a JSON array; create it as `[]` if absent. `concept_key` is
-the dedup key — normalize it (lowercase, hyphenated, domain-prefixed) and never
-emit a concept whose key already exists.
-
-Then **regenerate** `~/.claude/daily-lessons/index.html` from the full ledger: a
-clean, same-aesthetic library that lists every lesson (newest first) with title,
-one-liner, date, tags, and a link to each HTML file. Show a running total
-("Lesson 12 of an ever-growing pile").
+Running the renderer in Step 5 appended the `index.json` ledger record
+(`concept_key` is the dedup key — it refuses duplicates) and regenerated
+`~/.claude/daily-lessons/index.html` from the full ledger, newest first. There is
+nothing to update by hand. If you've edited a shell in `assets/` and want to
+re-skin the existing library, run `python3 "$RENDER" --rebuild-library`.
 
 ---
 
@@ -207,6 +200,10 @@ in one line.
 
 ## Hard rules
 
+- **Never reproduce or restyle the page chrome.** The HTML shell, CSS, and JS are
+  canon in the plugin's `assets/`, assembled by `render_lesson.py`. Author only
+  `meta.json` + the body fragment. To change the design, edit the `assets/`
+  shells — never inline a bespoke page.
 - Never teach a `concept_key` already in `index.json`.
 - Never fabricate session activity; if it's thin, say so.
 - Never echo secrets, keys, tokens, or proprietary code from my sessions.
