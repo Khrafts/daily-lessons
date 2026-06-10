@@ -53,16 +53,12 @@ model → a worked example → common pitfalls → go-deeper pointers + a self-c
 
 ## Chat with your lessons
 
-Every lesson page has an **Ask about this lesson** button. Run:
+Every lesson page has an **Ask about this lesson** button, and it works with
+**zero setup**: `/daily-lesson` opens each new lesson through a tiny local
+server, so the chat is live the moment the page loads — no extra command to run.
 
-```
-/lesson-chat                  # start the local chat server and open the library
-/lesson-chat 9000             # same, on a different port
-```
-
-It serves your library at `http://127.0.0.1:8787` and the button becomes a live
-chat — start a conversation about a lesson, close the tab, come back days later
-and **continue** it where you left off. Continuity is real: each lesson's chat
+Start a conversation about a lesson, close the tab, come back days later and
+**continue** it where you left off. Continuity is real: each lesson's chat
 resumes the same `claude` session (`--resume`), and the transcript is saved to
 `chats.json` next to the lessons.
 
@@ -70,10 +66,20 @@ Answers come from the **local `claude` CLI** — your existing login and
 subscription, no API key. Still local-first: the only network calls are the
 ones `claude` itself makes, exactly like any other session.
 
-Lessons opened via `file://` show the button too — if the server is running, it
-deep-links straight into the served page; if not, it tells you how to start it.
-And lessons rendered before this feature gain the chat button automatically
-when viewed through the server.
+Want the whole library in one place, or need to bring the server back after a
+reboot? Run:
+
+```
+/lesson-chat                  # ensure the server is up, open the library
+/lesson-chat 9000             # same, on a different port
+```
+
+It serves your library at `http://127.0.0.1:8787` (loopback only — nothing is
+exposed to the network). The launcher is idempotent: it reuses a running server
+and only starts one if needed. Lessons opened directly via `file://` show the
+button too — if the server is running, the button deep-links into the served
+page; if not, it tells you how to start it. Lessons rendered before this feature
+gain the chat button automatically when viewed through the server.
 
 ---
 
