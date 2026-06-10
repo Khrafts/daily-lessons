@@ -1,36 +1,33 @@
 {
   "skill_name": "daily-lessons-pr-reviewer",
-  "notes": "Local planted-bug fixtures live in ../daily-lessons-pr-reviewer-workspace/fixture-repo (built by setup_fixtures.py). Each eval reviews one branch vs main. Baseline = same prompt, no skill.",
+  "notes": "Reproducible local benchmark. First run `python3 evals/setup_fixtures.py` to build the planted-bug fixture-repo; it prints `FIXTURE_REPO=<path>` as its last line. Then run each eval by substituting that path for `$FIXTURE_REPO` in the prompt below and feeding it to the skill. Baseline = same prompt with the skill disabled. Each eval reviews one branch vs main. See evals/README.md for the full procedure and grading.",
   "evals": [
     {
       "id": 0,
       "name": "escape-body-regression",
       "branch": "pr-harden-escaping",
       "planted": "esc() wrapped around dek and body in render_lesson.py (invariant #3). Framed as a security fix; actually double-escapes the raw-by-design article body and breaks every lesson.",
-      "prompt": "Can you review the `pr-harden-escaping` branch before I open a PR for it? It's a small security-hardening tweak to the lesson renderer in daily-lessons. There's a clone with the branch checked out at /Users/uyoyou.uwuseba/Work/daily-lessons/.claude/skills/daily-lessons-pr-reviewer-workspace/fixture-repo — review the diff `main...pr-harden-escaping`. Give me a thorough review with severities and a clear merge recommendation. Don't post anything to GitHub.",
+      "prompt": "Can you review the `pr-harden-escaping` branch before I open a PR for it? It's a small security-hardening tweak to the lesson renderer in daily-lessons. There's a clone with the branch checked out at $FIXTURE_REPO — review the diff `main...pr-harden-escaping`. Give me a thorough review with severities and a clear merge recommendation. Don't post anything to GitHub.",
       "expected_output": "Flags as Critical/blocking that dek and body are raw-by-design and escaping them double-escapes the inline HTML and the entire article, breaking rendering for every lesson. Recommends Request Changes. A reviewer fooled by the 'security' framing into approving it fails.",
-      "assertions": ["catches_body_escaping_regression", "severity_critical_or_blocking", "not_fooled_by_security_framing", "recommends_against_merge", "no_github_post"],
-      "files": []
+      "assertions": ["catches_body_escaping_regression", "severity_critical_or_blocking", "not_fooled_by_security_framing", "recommends_against_merge", "no_github_post"]
     },
     {
       "id": 1,
       "name": "privacy-egress",
       "branch": "pr-usage-analytics",
       "planted": "Adds a urllib telemetry ping uploading concept_key + title (invariant #7). Violates the local-only/privacy promise.",
-      "prompt": "Mind reviewing the `pr-usage-analytics` branch on daily-lessons? It adds a tiny anonymous usage ping so we can see which lesson concepts are popular. The repo clone with that branch is at /Users/uyoyou.uwuseba/Work/daily-lessons/.claude/skills/daily-lessons-pr-reviewer-workspace/fixture-repo — review `main...pr-usage-analytics`. Thorough review + a merge call please. Nothing posted to GitHub.",
+      "prompt": "Mind reviewing the `pr-usage-analytics` branch on daily-lessons? It adds a tiny anonymous usage ping so we can see which lesson concepts are popular. The repo clone with that branch is at $FIXTURE_REPO — review `main...pr-usage-analytics`. Thorough review + a merge call please. Nothing posted to GitHub.",
       "expected_output": "Flags as Critical/blocking that this introduces network egress that uploads session-derived data, breaking the repo's documented 'runs entirely locally, nothing leaves your machine' promise. Recommends Request Changes / Needs Discussion. Approving it as a harmless feature fails.",
-      "assertions": ["catches_network_egress", "links_to_local_only_promise", "severity_critical_or_blocking", "recommends_against_merge", "no_github_post"],
-      "files": []
+      "assertions": ["catches_network_egress", "links_to_local_only_promise", "severity_critical_or_blocking", "recommends_against_merge", "no_github_post"]
     },
     {
       "id": 2,
       "name": "subtitle-feature-drift",
       "branch": "pr-add-subtitle",
       "planted": "{{SUBTITLE}} token added to the frozen lesson-shell.html with NO matching renderer replacement (invariant #2 — literal {{SUBTITLE}} ships to users); plugin.json bumped to 0.3.0 while marketplace.json stays 0.2.0 (invariant #8 version drift); README left stale.",
-      "prompt": "Review the `pr-add-subtitle` branch on daily-lessons for me — it adds an optional subtitle line to lessons. Clone with the branch is at /Users/uyoyou.uwuseba/Work/daily-lessons/.claude/skills/daily-lessons-pr-reviewer-workspace/fixture-repo; review `main...pr-add-subtitle`. I want to know if it's ready to merge. Don't post to GitHub.",
+      "prompt": "Review the `pr-add-subtitle` branch on daily-lessons for me — it adds an optional subtitle line to lessons. Clone with the branch is at $FIXTURE_REPO; review `main...pr-add-subtitle`. I want to know if it's ready to merge. Don't post to GitHub.",
       "expected_output": "Catches (a) the {{SUBTITLE}} token added to the shell with no renderer replacement, so the literal text {{SUBTITLE}} would render on every page; and (b) the plugin.json version bump to 0.3.0 not mirrored in marketplace.json. Bonus: notes README/docs weren't updated. Recommends Request Changes.",
-      "assertions": ["catches_token_desync", "catches_version_drift", "recommends_against_merge", "no_github_post", "bonus_notes_readme_stale"],
-      "files": []
+      "assertions": ["catches_token_desync", "catches_version_drift", "recommends_against_merge", "no_github_post", "bonus_notes_readme_stale"]
     }
   ]
 }

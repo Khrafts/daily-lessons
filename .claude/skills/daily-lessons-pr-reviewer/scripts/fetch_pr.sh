@@ -16,6 +16,11 @@
 #   diff.patch  — the unified diff
 #   checks.txt  — CI check results (empty in local-diff mode)
 # Prints the output directory on stdout as the last line.
+#
+# Exit codes: 0 ok · 2 bad arguments · 3 gh CLI not installed · 4 PR fetch failed
+# (PR doesn't exist / gh not authed). This is fetch_pr's own code space and is
+# unrelated to render_lesson.py's exit codes (which also uses 3, for a duplicate
+# concept_key — a different script and domain).
 set -euo pipefail
 
 REPO="" ; PR="" ; BASE="" ; HEAD="" ; OUT=""
@@ -40,10 +45,10 @@ if [ -n "$PR" ]; then
   gh pr view "$PR" --repo "$REPO" \
     --json number,title,body,author,state,isDraft,files,additions,deletions,changedFiles,commits,baseRefName,headRefName,url,labels,reviewDecision \
     > "$OUT/meta.json" \
-    || { echo "fetch_pr: could not view PR #$PR in $REPO (does it exist? gh authed?)" >&2; exit 3; }
+    || { echo "fetch_pr: could not view PR #$PR in $REPO (does it exist? gh authed?)" >&2; exit 4; }
 
   gh pr diff "$PR" --repo "$REPO" > "$OUT/diff.patch" \
-    || { echo "fetch_pr: could not fetch diff for PR #$PR" >&2; exit 3; }
+    || { echo "fetch_pr: could not fetch diff for PR #$PR" >&2; exit 4; }
 
   # checks are best-effort: a PR with no CI configured returns non-zero
   gh pr checks "$PR" --repo "$REPO" > "$OUT/checks.txt" 2>&1 || true
