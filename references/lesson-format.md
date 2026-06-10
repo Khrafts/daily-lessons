@@ -143,3 +143,9 @@ markup in the body. Lesson pages rendered before the widget existed get the
 same marker-delimited block injected by `scripts/chat_server.py` at serve
 time, so they don't need re-rendering. Word counts are unaffected — the
 renderer counts only the body fragment, never the shell.
+
+The drawer now holds **multiple conversations** per lesson — a history list to
+browse and switch between past chats, a non-destructive "New chat", and an
+**Expand** toggle for a wider reading view (remembered in `localStorage`). All
+of this lives in the shell-owned block; the body contract and the renderer's
+token replacement are untouched.

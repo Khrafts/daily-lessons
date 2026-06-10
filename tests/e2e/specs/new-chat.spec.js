@@ -1,10 +1,12 @@
-// "New chat" reset flow: confirm dialog, cleared transcript, cleared server state.
+// "New chat" (v2): NON-destructive — creates a fresh conversation, empties the
+// transcript view, but the prior conversation survives and is reachable from the
+// history list. No confirm() any more.
 'use strict';
 
 const { test, expect } = require('@playwright/test');
 
 const ALPHA = 'lessons/2026-06-10-fixture-alpha.html';
-const MESSAGE = 'Message that should disappear after new chat';
+const FIRST = 'First chat message that must survive new-chat';
 
 async function resetChat(request, lessonParam) {
   const res = await request.post(
@@ -31,39 +33,63 @@ async function sendAndAwaitReply(page, text) {
   await expect(input).toBeEnabled({ timeout: 15000 });
 }
 
-test.describe('new chat', () => {
-  test('clears the transcript and resets server-side state', async ({ page }) => {
-    // This spec creates its own history first; it does not depend on other specs.
-    await resetChat(page.request, ALPHA);
+test.describe('new chat (non-destructive)', () => {
+  test('creates a fresh conversation, empties the view, keeps the old one', async ({
+    page,
+    request,
+  }) => {
+    // Start from a clean lesson so the row counts below are unambiguous.
+    await resetChat(request, ALPHA);
     await page.goto(`/${ALPHA}`);
     await page.getByTestId('chat-fab').click();
     await expect(page.getByTestId('chat-panel')).toHaveAttribute('data-open', 'true');
-    await sendAndAwaitReply(page, MESSAGE);
+    await sendAndAwaitReply(page, FIRST);
     await expect(page.locator('#dlc-messages .dlc-msg')).toHaveCount(2);
 
-    // With history present, #dlc-new asks for confirmation first — accept it.
-    page.on('dialog', (dialog) => dialog.accept());
+    // New chat is no longer a destructive reset: no confirm() should fire. If a
+    // dialog appears the test fails (a confirm would block forever otherwise).
+    let dialogSeen = false;
+    page.on('dialog', (dialog) => {
+      dialogSeen = true;
+      dialog.dismiss().catch(() => {});
+    });
     await page.getByTestId('chat-new').click();
 
-    // Transcript empties.
+    // The transcript view empties (the new, empty conversation is now active).
     await expect(page.locator('#dlc-messages .dlc-msg')).toHaveCount(0);
-
-    // FAB label resets to the empty-history label.
+    // FAB label resets to the empty-conversation label.
     await expect(page.getByTestId('chat-fab')).toContainText('Ask about this lesson');
+    expect(dialogSeen).toBe(false);
 
-    // Server state cleared: messages [] and session_id null.
-    await expect
-      .poll(
-        async () => {
-          const res = await page.request.get(
-            `/api/chat?lesson=${encodeURIComponent(ALPHA)}`
-          );
-          if (!res.ok()) return { error: res.status() };
-          const state = await res.json();
-          return { messages: state.messages, session_id: state.session_id };
-        },
-        { timeout: 7000 }
-      )
-      .toEqual({ messages: [], session_id: null });
+    // The prior conversation was NOT wiped: open history and see both rows.
+    await page.getByTestId('chat-history').click();
+    const convs = page.getByTestId('chat-conversations');
+    await expect(convs).toBeVisible();
+    const rows = convs.getByTestId('chat-conv-item');
+    await expect(rows).toHaveCount(2);
+    // One of the rows carries the title derived from the first message.
+    await expect(rows.filter({ hasText: FIRST })).toHaveCount(1);
+
+    // Switch back to the first conversation — its messages come back.
+    await rows.filter({ hasText: FIRST }).click();
+    await expect(
+      page.locator('#dlc-messages .dlc-msg.dlc-user .dlc-body').filter({ hasText: FIRST })
+    ).toBeVisible();
+    await expect(
+      page
+        .locator('#dlc-messages .dlc-msg.dlc-assistant .dlc-body')
+        .filter({ hasText: `You asked: "${FIRST}"` })
+    ).toBeVisible();
+
+    // The server still holds the first conversation's two messages (by id).
+    const view = await (
+      await page.request.get(`/api/chat?lesson=${encodeURIComponent(ALPHA)}`)
+    ).json();
+    expect(view.ok).toBe(true);
+    expect(Array.isArray(view.conversations)).toBe(true);
+    expect(view.conversations.length).toBe(2);
+    const withFirst = view.conversations.find((c) => c.title === FIRST);
+    expect(withFirst).toBeTruthy();
+    expect(withFirst.message_count).toBe(2);
   });
 });

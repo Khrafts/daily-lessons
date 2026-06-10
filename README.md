@@ -58,9 +58,15 @@ Every lesson page has an **Ask about this lesson** button, and it works with
 server, so the chat is live the moment the page loads — no extra command to run.
 
 Start a conversation about a lesson, close the tab, come back days later and
-**continue** it where you left off. Continuity is real: each lesson's chat
-resumes the same `claude` session (`--resume`), and the transcript is saved to
-`chats.json` next to the lessons.
+**continue** it where you left off. Continuity is real: each chat resumes the
+same `claude` session (`--resume`), and the transcript is saved to `chats.json`
+next to the lessons.
+
+Each lesson can hold **more than one** conversation. Start a new chat without
+losing the old ones — the drawer's history lets you browse a lesson's past chats
+and switch between them, each with its own thread and session. Want more room to
+read? **Expand** widens the drawer into a centered reading column, and it
+remembers the choice.
 
 Answers come from the **local `claude` CLI** — your existing login and
 subscription, no API key. Still local-first: the only network calls are the

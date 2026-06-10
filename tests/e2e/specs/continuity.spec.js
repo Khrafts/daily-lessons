@@ -102,34 +102,45 @@ test.describe('continuity across reloads', () => {
       .toBe(4);
     expect(sessionAfterSecond).toBe(sessionAfterFirst);
 
-    // chats.json on disk follows the documented schema:
-    // {"lessons/<f>.html": {"session_id": str|null, "messages": [{role, text, ts}]}}.
-    // Beta's entry holds all 4 messages and the API-reported session id.
+    // chats.json on disk follows the v2 schema:
+    //   {"lessons/<f>.html": {"active_id": <id|null>,
+    //      "conversations": [{id, session_id, title, messages:[{role,text,ts}], ...}]}}.
+    // The ACTIVE conversation holds all 4 messages and the API-reported session id.
+    function activeConv() {
+      try {
+        const entry = JSON.parse(fs.readFileSync(CHATS_JSON, 'utf8'))[BETA];
+        if (!entry || !Array.isArray(entry.conversations)) return null;
+        // Strictly require active_id to resolve — no positional fallback, so the
+        // test fails (rather than silently passing) if active_id ever stops
+        // pointing at the live conversation.
+        return entry.conversations.find((c) => c.id === entry.active_id) || null;
+      } catch {
+        return null;
+      }
+    }
+
     await expect
       .poll(
         () => {
-          try {
-            const entry = JSON.parse(fs.readFileSync(CHATS_JSON, 'utf8'))[BETA];
-            return entry && Array.isArray(entry.messages) ? entry.messages.length : -1;
-          } catch {
-            return -1;
-          }
+          const conv = activeConv();
+          return conv && Array.isArray(conv.messages) ? conv.messages.length : -1;
         },
         { timeout: 7000 }
       )
       .toBe(4);
 
-    const entry = JSON.parse(fs.readFileSync(CHATS_JSON, 'utf8'))[BETA];
-    expect(entry.session_id).toBe(sessionAfterFirst);
-    expect(entry.messages.map((m) => m.role)).toEqual([
+    const conv = activeConv();
+    expect(conv).toBeTruthy();
+    expect(conv.session_id).toBe(sessionAfterFirst);
+    expect(conv.messages.map((m) => m.role)).toEqual([
       'user',
       'assistant',
       'user',
       'assistant',
     ]);
-    expect(entry.messages[0].text).toBe(FIRST);
-    expect(entry.messages[1].text).toContain(`You asked: "${FIRST}"`);
-    expect(entry.messages[2].text).toBe(SECOND);
-    expect(entry.messages[3].text).toContain(`You asked: "${SECOND}"`);
+    expect(conv.messages[0].text).toBe(FIRST);
+    expect(conv.messages[1].text).toContain(`You asked: "${FIRST}"`);
+    expect(conv.messages[2].text).toBe(SECOND);
+    expect(conv.messages[3].text).toContain(`You asked: "${SECOND}"`);
   });
 });

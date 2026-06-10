@@ -7,9 +7,11 @@ same-origin) and exposes a small chat API. Each POSTed message spawns one
 headless `claude -p … --output-format stream-json` run — the same auth and
 subscription as any Claude Code session; nothing leaves the machine beyond
 what a normal session sends. Transcripts and session ids persist in
-lessons-dir/chats.json, so a lesson's chat continues (`--resume`) across
-server restarts. Lesson pages rendered before this feature existed get the
-chat widget — the block between the daily-lesson-chat:v1 markers in
+lessons-dir/chats.json (one lesson can hold several conversations; a v1
+single-conversation file is migrated in place at load), so a lesson's chats
+continue (`--resume`) across server restarts. Lesson pages rendered before
+this feature existed get the chat widget — the block between the
+daily-lesson-chat:v1 markers in
 assets/lesson-shell.html — injected at serve time; files on disk are never
 modified.
 
@@ -88,7 +90,26 @@ def warn(msg):
 
 
 def now_iso():
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    # millisecond precision: keeps "newest-updated-first" ordering correct even
+    # when two conversations are touched within the same wall-clock second.
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+
+
+def new_conversation_id():
+    return "c-" + uuid.uuid4().hex[:12]
+
+
+def derive_title(text):
+    """First-user-message text -> conversation title.
+
+    Strip and collapse internal whitespace; empty -> "New chat"; otherwise the
+    first 48 characters, with an ellipsis appended when truncated."""
+    collapsed = re.sub(r"\s+", " ", text or "").strip()
+    if not collapsed:
+        return "New chat"
+    if len(collapsed) <= 48:
+        return collapsed
+    return collapsed[:48] + "…"
 
 
 # ---------- lesson text -------------------------------------------------------
@@ -137,15 +158,30 @@ def load_widget_block(assets_dir):
 
 
 def inject_widget(raw, widget_block):
-    """Inject the widget block before </body> of a lesson page (bytes -> bytes).
+    """Ensure a lesson page carries the CURRENT widget block (bytes -> bytes).
 
-    Pages that already carry the marker are returned byte-identical."""
-    if not widget_block or WIDGET_MARKER.encode("utf-8") in raw:
+    A page with no block gets it inserted before </body>; a page with an older
+    baked block has it replaced (so a served lesson always runs the current
+    widget, even one rendered before the latest version); a page already
+    carrying the identical block is returned byte-identical."""
+    if not widget_block:
         return raw
     try:
         page = raw.decode("utf-8")
     except UnicodeDecodeError:
         return raw
+    start = page.find(WIDGET_START)
+    end = page.find(WIDGET_END)
+    if start != -1:
+        # a block is already present; replace it (no-op if identical). On a
+        # garbled block (END missing or before START) bail rather than insert a
+        # second one.
+        if end == -1 or end < start:
+            return raw
+        end += len(WIDGET_END)
+        if page[start:end] == widget_block:
+            return raw                       # already current → byte-identical
+        return (page[:start] + widget_block + page[end:]).encode("utf-8")
     idx = page.rfind("</body>")
     if idx == -1:
         return raw
@@ -155,14 +191,27 @@ def inject_widget(raw, widget_block):
 # ---------- persistence -------------------------------------------------------
 
 class ChatStore:
-    """chats.json: {"lessons/<f>.html": {"session_id": str|null, "messages": [...]}}.
+    """chats.json (v2): per lesson, a list of conversations + an active id.
 
-    All mutations hold one lock and write atomically (tmp file + os.replace)."""
+        {"lessons/<f>.html": {
+            "conversations": [
+                {"id": "c-<12hex>", "title": str, "session_id": str|null,
+                 "messages": [{"role", "text", "ts"} ...],
+                 "created_at": ISO, "updated_at": ISO}],
+            "active_id": <conversation id | null>}}
+
+    A v1 entry — {"session_id", "messages"} — is migrated losslessly at load
+    (idempotently; entries already in v2 shape are left untouched), then the
+    store is re-saved once. All mutations hold one lock and write atomically
+    (tmp file + os.replace)."""
 
     def __init__(self, lessons_dir):
         self.path = lessons_dir / "chats.json"
         self.lock = threading.Lock()
         self.data = self._load()
+        if self._migrate():
+            with self.lock:
+                self._save()
 
     def _load(self):
         try:
@@ -174,6 +223,61 @@ class ChatStore:
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _migrate(self):
+        """Bring every entry into v2 shape. Returns True if anything changed."""
+        changed = False
+        for lesson, entry in list(self.data.items()):
+            # v2 only if conversations is actually a LIST — a dict that merely
+            # carries the key with a bad value (hand-edit, half-written file) is
+            # NOT v2 and must be rebuilt, or it crashes every later operation.
+            if isinstance(entry, dict) and isinstance(entry.get("conversations"), list):
+                if self._normalize_v2(entry):  # repair a missing/dangling active_id
+                    changed = True
+                continue
+            changed = True
+            self.data[lesson] = self._migrate_entry(entry)
+        return changed
+
+    @staticmethod
+    def _normalize_v2(entry):
+        """Ensure a v2 entry has a valid active_id: present, and resolving to a
+        live conversation (else the newest-updated one, else None). Returns True
+        if it changed the entry."""
+        ids = {c.get("id") for c in entry["conversations"] if isinstance(c, dict)}
+        active = entry.get("active_id")
+        if active in ids and active is not None:
+            if "active_id" in entry:
+                return False
+            entry["active_id"] = active
+            return True
+        live = [c for c in entry["conversations"]
+                if isinstance(c, dict) and c.get("id")]
+        new_active = (max(live, key=ChatStore._ts_key)["id"] if live else None)
+        if "active_id" in entry and entry["active_id"] == new_active:
+            return False
+        entry["active_id"] = new_active
+        return True
+
+    @staticmethod
+    def _migrate_entry(entry):
+        if not isinstance(entry, dict):
+            return {"conversations": [], "active_id": None}
+        messages = entry.get("messages")
+        messages = list(messages) if isinstance(messages, list) else []
+        session_id = entry.get("session_id")
+        if not messages and not session_id:
+            return {"conversations": [], "active_id": None}
+        first_user = next((m for m in messages
+                           if isinstance(m, dict) and m.get("role") == "user"), None)
+        title = derive_title(first_user.get("text") if first_user else "")
+        first_ts = messages[0].get("ts") if messages and isinstance(messages[0], dict) else None
+        last_ts = messages[-1].get("ts") if messages and isinstance(messages[-1], dict) else None
+        now = now_iso()
+        conv = {"id": new_conversation_id(), "title": title,
+                "session_id": session_id, "messages": messages,
+                "created_at": first_ts or now, "updated_at": last_ts or now}
+        return {"conversations": [conv], "active_id": conv["id"]}
+
     def _save(self):
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False) + "\n",
@@ -181,30 +285,165 @@ class ChatStore:
         os.replace(str(tmp), str(self.path))
 
     def _entry(self, lesson):
-        return self.data.setdefault(lesson, {"session_id": None, "messages": []})
+        entry = self.data.get(lesson)
+        if not (isinstance(entry, dict) and isinstance(entry.get("conversations"), list)):
+            entry = {"conversations": [], "active_id": None}
+            self.data[lesson] = entry
+        elif "active_id" not in entry:
+            entry["active_id"] = None
+        return entry
 
-    def get(self, lesson):
-        with self.lock:
-            entry = self.data.get(lesson) or {}
-            return {"session_id": entry.get("session_id"),
-                    "messages": list(entry.get("messages") or [])}
+    @staticmethod
+    def _find(entry, conv_id):
+        for conv in entry["conversations"]:
+            if isinstance(conv, dict) and conv.get("id") == conv_id:
+                return conv
+        return None
 
-    def append_message(self, lesson, role, text):
-        with self.lock:
-            self._entry(lesson)["messages"].append(
-                {"role": role, "text": text, "ts": now_iso()})
-            self._save()
+    @staticmethod
+    def _ts_key(conv):
+        """Sort key for newest-updated-first: parse the ISO timestamp so the
+        order is chronological regardless of offset/DST (lexicographic string
+        compare disagrees across an offset change). Always returns an aware
+        datetime so a naive (hand-edited) value can never raise mid-sort."""
+        try:
+            dt = datetime.fromisoformat(conv.get("updated_at") or "")
+        except (ValueError, TypeError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
-    def finish_turn(self, lesson, session_id, text):
+    @staticmethod
+    def _summary(conv):
+        return {"id": conv["id"], "title": conv["title"],
+                "session_id": conv.get("session_id"),
+                "message_count": len(conv.get("messages") or []),
+                "created_at": conv.get("created_at"),
+                "updated_at": conv.get("updated_at")}
+
+    @classmethod
+    def _summaries(cls, entry):
+        """Conversation summaries, newest-updated-first."""
+        convs = sorted(entry["conversations"], key=cls._ts_key, reverse=True)
+        return [cls._summary(c) for c in convs]
+
+    def get_view(self, lesson, conversation=None):
+        """The GET /api/chat base-shape data, or None if `conversation` is given
+        but unknown (caller turns that into a 404)."""
         with self.lock:
             entry = self._entry(lesson)
-            entry["session_id"] = session_id
-            entry["messages"].append({"role": "assistant", "text": text, "ts": now_iso()})
+            if conversation is not None:
+                selected = self._find(entry, conversation)
+                if selected is None:
+                    return None
+            elif entry["active_id"] is not None:
+                selected = self._find(entry, entry["active_id"])
+            else:
+                selected = None
+            return {
+                "ok": True, "lesson": lesson, "active_id": entry["active_id"],
+                "conversations": self._summaries(entry),
+                "messages": list(selected.get("messages") or []) if selected else [],
+                "session_id": selected.get("session_id") if selected else None,
+                "conversation": selected["id"] if selected else None,
+            }
+
+    def new_conversation(self, lesson):
+        """Create an empty conversation, make it active, return (id, summaries)."""
+        with self.lock:
+            entry = self._entry(lesson)
+            now = now_iso()
+            conv = {"id": new_conversation_id(), "title": "New chat",
+                    "session_id": None, "messages": [],
+                    "created_at": now, "updated_at": now}
+            entry["conversations"].append(conv)
+            entry["active_id"] = conv["id"]
+            self._save()
+            return conv["id"], self._summaries(entry)
+
+    def ensure_active(self, lesson):
+        """Return the active conversation id, creating one if none exists."""
+        with self.lock:
+            entry = self._entry(lesson)
+            if entry["active_id"] is not None and self._find(entry, entry["active_id"]):
+                return entry["active_id"]
+            now = now_iso()
+            conv = {"id": new_conversation_id(), "title": "New chat",
+                    "session_id": None, "messages": [],
+                    "created_at": now, "updated_at": now}
+            entry["conversations"].append(conv)
+            entry["active_id"] = conv["id"]
+            self._save()
+            return conv["id"]
+
+    def has_conversation(self, lesson, conv_id):
+        with self.lock:
+            return self._find(self._entry(lesson), conv_id) is not None
+
+    def switch(self, lesson, conv_id):
+        """Set active_id to conv_id. Returns True if it exists, else False."""
+        with self.lock:
+            entry = self._entry(lesson)
+            if self._find(entry, conv_id) is None:
+                return False
+            entry["active_id"] = conv_id
+            self._save()
+            return True
+
+    def delete_conversation(self, lesson, conv_id):
+        """Remove a conversation. Returns (found, active_id). If it was active,
+        active_id becomes the most-recently-updated remaining conversation
+        (or None)."""
+        with self.lock:
+            entry = self._entry(lesson)
+            conv = self._find(entry, conv_id)
+            if conv is None:
+                return False, entry["active_id"]
+            entry["conversations"] = [c for c in entry["conversations"]
+                                      if c.get("id") != conv_id]
+            if entry["active_id"] == conv_id:
+                if entry["conversations"]:
+                    newest = max(entry["conversations"], key=self._ts_key)
+                    entry["active_id"] = newest["id"]
+                else:
+                    entry["active_id"] = None
+            self._save()
+            return True, entry["active_id"]
+
+    def append_message(self, lesson, conv_id, role, text):
+        """Append a message to a conversation, bumping updated_at. The title is
+        set when the FIRST user message lands in a conversation that has had no
+        prior user message, so it always reflects the opening question."""
+        with self.lock:
+            entry = self._entry(lesson)
+            conv = self._find(entry, conv_id)
+            if conv is None:
+                return
+            if role == "user" and not any(
+                    isinstance(m, dict) and m.get("role") == "user"
+                    for m in conv["messages"]):
+                conv["title"] = derive_title(text)
+            now = now_iso()
+            conv["messages"].append({"role": role, "text": text, "ts": now})
+            conv["updated_at"] = now
+            self._save()
+
+    def finish_turn(self, lesson, conv_id, session_id, text):
+        """Write the assistant message + session_id + updated_at to conv_id."""
+        with self.lock:
+            entry = self._entry(lesson)
+            conv = self._find(entry, conv_id)
+            if conv is None:
+                return
+            conv["session_id"] = session_id
+            now = now_iso()
+            conv["messages"].append({"role": "assistant", "text": text, "ts": now})
+            conv["updated_at"] = now
             self._save()
 
     def reset(self, lesson):
+        """Wipe ALL conversations for this lesson."""
         with self.lock:
-            self.data.pop(lesson, None)
+            self.data[lesson] = {"conversations": [], "active_id": None}
             self._save()
 
 
@@ -540,6 +779,12 @@ class ChatHandler(BaseHTTPRequestHandler):
             self._send_json(403, {"ok": False, "error": "cross-origin"})
         elif path == "/api/chat":
             self._handle_chat_post()
+        elif path == "/api/chat/new":
+            self._handle_new()
+        elif path == "/api/chat/switch":
+            self._handle_switch()
+        elif path == "/api/chat/delete":
+            self._handle_delete()
         elif path == "/api/chat/reset":
             self._handle_reset()
         else:
@@ -547,15 +792,17 @@ class ChatHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"ok": False, "error": "not found"})
 
     def _handle_chat_get(self, query):
-        lesson = (parse_qs(query).get("lesson") or [None])[0]
+        params = parse_qs(query)
+        lesson = (params.get("lesson") or [None])[0]
+        conversation = (params.get("conversation") or [None])[0]
         if not lesson:
             return self._send_json(400, {"ok": False, "error": "bad request"})
         if self._lesson_path(lesson) is None:
             return self._send_json(404, {"ok": False, "error": "unknown lesson"})
-        entry = self.server.store.get(lesson)
-        self._send_json(200, {"ok": True, "lesson": lesson,
-                              "session_id": entry["session_id"],
-                              "messages": entry["messages"]})
+        view = self.server.store.get_view(lesson, conversation)
+        if view is None:  # conversation= named an id this lesson doesn't have
+            return self._send_json(404, {"ok": False, "error": "unknown conversation"})
+        self._send_json(200, view)
 
     def _handle_chat_post(self):
         body = self._read_json_body()
@@ -564,22 +811,43 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._send_json(400, {"ok": False, "error": "bad request"})
         lesson = body.get("lesson")
         message = body.get("message")
+        conversation = body.get("conversation", None)
         if (not isinstance(lesson, str) or not isinstance(message, str)
-                or not message.strip()):
+                or not message.strip()
+                or (conversation is not None and not isinstance(conversation, str))):
             return self._send_json(400, {"ok": False, "error": "bad request"})
         lesson_path = self._lesson_path(lesson)
         if lesson_path is None:
             return self._send_json(404, {"ok": False, "error": "unknown lesson"})
+        # Resolve the target conversation up front (before streaming): an explicit
+        # unknown id is a 404 here, never a partial stream.
+        if conversation is not None:
+            if not self.server.store.has_conversation(lesson, conversation):
+                return self._send_json(404, {"ok": False, "error": "unknown conversation"})
         lock = _turn_lock(self.server, lesson)
         if not lock.acquire(False):
             return self._send_json(409, {"ok": False, "error": "busy"})
         try:
+            # Bind the turn to a single conversation id and operate on it BY ID
+            # for the whole turn, so a concurrent /new or /switch can move
+            # active_id without ever misrouting this in-flight turn.
+            conv_id = conversation or self.server.store.ensure_active(lesson)
+            # Re-check existence INSIDE the lock: a /delete or /reset may have
+            # won the race between the pre-lock check above and acquiring this
+            # lock (no turn was in flight yet, so its 409 guard didn't fire).
+            # Bail with a clean 404 before any SSE byte rather than streaming a
+            # reply into a conversation that no longer exists (silent loss).
+            if conversation is not None and not self.server.store.has_conversation(
+                    lesson, conv_id):
+                return self._send_json(404, {"ok": False, "error": "unknown conversation"})
             src = lesson_path.read_text(encoding="utf-8", errors="replace")
             title = extract_lesson_title(src)
             text = extract_lesson_text(src)
-            session_id = self.server.store.get(lesson)["session_id"]
+            view = self.server.store.get_view(lesson, conv_id)
+            session_id = view["session_id"] if view else None
             # user message is persisted up front so a failed turn is retryable
-            self.server.store.append_message(lesson, "user", message)
+            # (and it sets the conversation title on the first user message)
+            self.server.store.append_message(lesson, conv_id, "user", message)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -592,8 +860,11 @@ class ChatHandler(BaseHTTPRequestHandler):
                         self._sse("delta", {"text": payload})
                     elif kind == "done":
                         self.server.store.finish_turn(
-                            lesson, payload.get("session_id"), payload.get("text", ""))
-                        self._sse("done", payload)
+                            lesson, conv_id, payload.get("session_id"),
+                            payload.get("text", ""))
+                        out = dict(payload)
+                        out["conversation"] = conv_id
+                        self._sse("done", out)
             except ChatBackendError as err:
                 self._sse_quiet("error", {"message": str(err)})
             except (BrokenPipeError, ConnectionResetError):
@@ -606,14 +877,78 @@ class ChatHandler(BaseHTTPRequestHandler):
         finally:
             lock.release()
 
-    def _handle_reset(self):
+    def _post_lesson(self):
+        """Read a POST body whose only required field is `lesson`; resolve it.
+
+        Returns (lesson, error_handled). On any failure it has already sent the
+        right 400/404 response and error_handled is True."""
         body = self._read_json_body()
         if not isinstance(body, dict):
             self.close_connection = True  # request body may be unconsumed
-            return self._send_json(400, {"ok": False, "error": "bad request"})
+            self._send_json(400, {"ok": False, "error": "bad request"})
+            return None, True
         lesson = body.get("lesson")
         if not isinstance(lesson, str) or not lesson:
+            self._send_json(400, {"ok": False, "error": "bad request"})
+            return None, True
+        if self._lesson_path(lesson) is None:
+            self._send_json(404, {"ok": False, "error": "unknown lesson"})
+            return None, True
+        return (body, lesson), False
+
+    def _handle_new(self):
+        parsed, handled = self._post_lesson()
+        if handled:
+            return
+        _, lesson = parsed
+        new_id, summaries = self.server.store.new_conversation(lesson)
+        self._send_json(200, {"ok": True, "id": new_id, "active_id": new_id,
+                              "conversations": summaries})
+
+    def _handle_switch(self):
+        parsed, handled = self._post_lesson()
+        if handled:
+            return
+        body, lesson = parsed
+        conversation = body.get("conversation")
+        if not isinstance(conversation, str) or not conversation:
             return self._send_json(400, {"ok": False, "error": "bad request"})
+        if not self.server.store.switch(lesson, conversation):
+            return self._send_json(404, {"ok": False, "error": "unknown conversation"})
+        view = self.server.store.get_view(lesson, conversation)
+        self._send_json(200, {"ok": True, "active_id": conversation,
+                              "conversation": conversation,
+                              "messages": view["messages"],
+                              "session_id": view["session_id"]})
+
+    def _handle_delete(self):
+        parsed, handled = self._post_lesson()
+        if handled:
+            return
+        body, lesson = parsed
+        conversation = body.get("conversation")
+        if not isinstance(conversation, str) or not conversation:
+            return self._send_json(400, {"ok": False, "error": "bad request"})
+        if not self.server.store.has_conversation(lesson, conversation):
+            return self._send_json(404, {"ok": False, "error": "unknown conversation"})
+        lock = _turn_lock(self.server, lesson)
+        if not lock.acquire(False):  # never delete a streaming conversation
+            return self._send_json(409, {"ok": False, "error": "busy"})
+        try:
+            found, active_id = self.server.store.delete_conversation(lesson, conversation)
+            entry_view = self.server.store.get_view(lesson)
+        finally:
+            lock.release()
+        if not found:  # raced away between the check and the lock
+            return self._send_json(404, {"ok": False, "error": "unknown conversation"})
+        self._send_json(200, {"ok": True, "active_id": active_id,
+                              "conversations": entry_view["conversations"]})
+
+    def _handle_reset(self):
+        parsed, handled = self._post_lesson()
+        if handled:
+            return
+        _, lesson = parsed
         lock = _turn_lock(self.server, lesson)
         if not lock.acquire(False):  # never reset under a turn in flight
             return self._send_json(409, {"ok": False, "error": "busy"})

@@ -55,9 +55,16 @@ Endpoints:
 |---|---|---|---|
 | `/`, `/index.html`, `/lessons/*.html` | GET | serve the library; legacy lesson pages get the widget injected at serve time | n/a |
 | `/api/health` | GET | `{ok, app, backend, version}` — lets `file://` pages discover a running server | `Access-Control-Allow-Origin: *` (read-only, no secrets) |
-| `/api/chat?lesson=lessons/<f>.html` | GET | stored transcript + session metadata for that lesson | same-origin only |
-| `/api/chat` | POST `{lesson, message}` | run one turn; respond as SSE: `delta` events (streamed text), then `done` | same-origin only |
-| `/api/chat/reset` | POST `{lesson}` | start a fresh chat (drop session id + transcript) | same-origin only |
+| `/api/chat?lesson=lessons/<f>.html[&conversation=<id>]` | GET | conversation summaries + the selected conversation's transcript & session metadata | same-origin only |
+| `/api/chat` | POST `{lesson, message, conversation?}` | run one turn on the target conversation; respond as SSE: `delta` events, then `done` (now carries `conversation`) | same-origin only |
+| `/api/chat/new` | POST `{lesson}` | create an empty conversation and make it active | same-origin only |
+| `/api/chat/switch` | POST `{lesson, conversation}` | set the active conversation; return its transcript | same-origin only |
+| `/api/chat/delete` | POST `{lesson, conversation}` | remove one conversation (busy → 409) | same-origin only |
+| `/api/chat/reset` | POST `{lesson}` | wipe **all** conversations for the lesson | same-origin only |
+
+The endpoint shapes below are the **v2** contract (multiple conversations per
+lesson). See the *v2* section near the end of this doc for the full request/
+response payloads and the conversation-by-id turn routing invariant.
 
 **Same-origin enforcement:** mutating/reading chat endpoints reject any request
 whose `Origin` header is present and ≠ the server's own origin (curl/no-Origin
@@ -101,10 +108,12 @@ claude -p
 - One in-flight turn per lesson (per-lesson lock); a second send while busy
   gets a 409.
 
-**Persistence:** `~/.claude/daily-lessons/chats.json` —
-`{"lessons/<file>.html": {"session_id", "messages": [{role, text, ts}]}}`.
-The transcript is what the widget restores on page load; the `session_id` is
-what makes "continue" real (full model-side context via `--resume`).
+**Persistence:** `~/.claude/daily-lessons/chats.json`. The **v2** shape holds
+multiple conversations per lesson — see the *v2* section for the schema and the
+load-time migration from the v1 single-conversation shape. The transcript of the
+selected/active conversation is what the widget restores on page load; each
+conversation's `session_id` is what makes "continue" real (full model-side
+context via `--resume`).
 
 **Backends:** `--backend claude` (default) or `--backend mock` (env
 `DAILY_LESSON_CHAT_BACKEND=mock`) — a deterministic streaming responder used by
@@ -130,8 +139,10 @@ UX (matches the black-and-white Fraunces/JetBrains Mono canon):
   button, inline code, bold/em, lists) in the lesson's typography. A thin
   "thinking" shimmer shows while waiting for the first delta; text streams in
   live. `Esc` or ✕ closes; state survives reopen.
-- **New chat** button in the drawer header → `/api/chat/reset` + clears the
-  transcript (confirm if a chat exists).
+- **New chat** button in the drawer header → `/api/chat/new` (v2): creates a
+  fresh, empty conversation and switches the view to it. Non-destructive — older
+  conversations stay and appear in the history list. No `confirm()`.
+- **History** + **Expand** header buttons (v2) — see the *v2* section.
 - **Serving-mode awareness:**
   - Page served by `chat_server.py` (http) → fully live.
   - Page opened via `file://` → the widget probes `http://127.0.0.1:8787/api/health`.
@@ -141,11 +152,15 @@ UX (matches the black-and-white Fraunces/JetBrains Mono canon):
     inside Claude Code, or the `python3 …/chat_server.py` one-liner) with a
     copy button.
 
-**Legacy pages** (rendered before this feature): the server injects the same
-marker-delimited block — extracted at startup from its own
-`assets/lesson-shell.html` — before `</body>` when serving any lesson page
-that lacks the marker. One source of truth, and old lessons get chat without
-re-rendering when viewed through the server.
+**Legacy pages & widget upgrades** (rendered before this feature, or with an
+older widget): the server holds one canonical block — extracted at startup from
+its own `assets/lesson-shell.html`. When serving a lesson page it **inserts**
+the block before `</body>` if absent, and **replaces** an older baked block
+(same markers, different content) with the current one; a page already carrying
+the identical block is served byte-identical. So a served lesson always runs the
+current widget — old lessons get chat, and lessons baked with a v1 widget pick
+up the multi-conversation/expand UI — all without re-rendering. (A `file://`
+page keeps whatever it was baked with until opened through the server.)
 
 ### 3. `/lesson-chat` command — `commands/lesson-chat.md` (new)
 
@@ -168,6 +183,128 @@ used in `commands/daily-lesson.md`.
   reset during an in-flight turn is refused the same way).
 - Server not running (file:// case) → graceful instructions, never a dead
   button.
+
+## v2: multiple conversations + expand
+
+v1 gave each lesson exactly one chat; "New chat" wiped it. v2 lets a lesson hold
+**many** conversations: start a fresh one without losing the old, browse the
+lesson's chat history, switch between them, and expand the drawer for a wider
+reading view. The transport, security model, backends, streaming, and grounding
+are unchanged — only the persistence shape, the conversation-routing logic, and
+the widget's drawer chrome grow.
+
+### chats.json shape (v2) + migration
+
+```jsonc
+{
+  "lessons/<file>.html": {
+    "active_id": "c-ab12…" ,            // the conversation the widget shows by default; null when none
+    "conversations": [
+      {
+        "id": "c-ab12…",                // server-minted, stable for the life of the conversation
+        "title": "First user message…", // derived from the first user message (collapsed, ≤48 chars)
+        "session_id": "…" ,             // claude --resume id for THIS conversation; null until the first turn
+        "messages": [{ "role", "text", "ts" }],
+        "created_at": "…",
+        "updated_at": "…"               // bumped on every append; list orders by this, newest first
+      }
+    ]
+  }
+}
+```
+
+**Migration at load:** a v1 entry (`{session_id, messages}`) is rewritten on
+first read into a single conversation `{id, title (from its first user message),
+session_id, messages, created_at, updated_at}`, which becomes `active_id`. An
+already-v2 entry is left as-is. Empty/legacy/garbage entries normalise to
+`{active_id: null, conversations: []}`. All mutations stay atomic under the store
+lock + tmp-file `os.replace`.
+
+`ChatStore` gains conversation-aware methods (names internal): `get_view(lesson,
+conversation=None)` (the GET base shape); `new_conversation(lesson)`;
+`switch(lesson, id)`; `delete_conversation(lesson, id)`; `append_message(lesson,
+conv_id, role, text)` (sets the title on the first user message, bumps
+`updated_at`); `finish_turn(lesson, conv_id, session_id, text)`;
+`ensure_active(lesson)` (creates one if none); `reset(lesson)` (wipe all).
+
+### Endpoints (v2 payloads)
+
+- **GET `/api/chat?lesson=<l>[&conversation=<id>]`** → `200`:
+  ```jsonc
+  {
+    "ok": true, "lesson": "<l>", "active_id": "<id|null>",
+    "conversations": [{ id, title, session_id, message_count, created_at, updated_at }],
+    "messages": [ /* the SELECTED conversation's messages */ ],
+    "session_id": "<selected conv's session_id | null>",
+    "conversation": "<selected id | null>"
+  }
+  ```
+  `conversations` is newest-by-`updated_at` first. The **selected** conversation
+  is `?conversation=` if given (`404 {"error":"unknown conversation"}` when that
+  id isn't in this lesson), else the active one, else none (`messages: []`).
+  Reading never changes `active_id`. Unknown lesson → `404 {"error":"unknown
+  lesson"}`.
+- **POST `/api/chat`** `{lesson, message, conversation?}` → SSE (framing
+  unchanged). The turn **resolves its target conversation id up front and
+  operates on it by id** for the whole turn — so a concurrent `/new` or `/switch`
+  that moves `active_id` can never misroute an in-flight turn. Resolution: given
+  + unknown → `404` before streaming; given + known → that id; else the active
+  one; else create one (it becomes active). The user message is persisted to that
+  id first (also sets the title on the first user message); `finish_turn` writes
+  the assistant message + `session_id` + `updated_at` to that **same** id. The
+  `done` payload now includes `"conversation": <id>` alongside `{session_id,
+  text}`. The per-lesson turn lock still serialises POST `/api/chat`.
+- **POST `/api/chat/new`** `{lesson}` → `200 {ok, id, active_id, conversations}`.
+  Creates an empty conversation (title `"New chat"`) and makes it active; never
+  clears others. Store-lock only — no turn lock (purely additive).
+- **POST `/api/chat/switch`** `{lesson, conversation}` → `200 {ok, active_id,
+  conversation, messages, session_id}` or `404`. Sets `active_id`; allowed
+  mid-turn (store-lock only).
+- **POST `/api/chat/delete`** `{lesson, conversation}` → takes the per-lesson
+  turn lock **non-blocking** (`409 {"error":"busy"}` if a turn is in flight, so a
+  streaming conversation is never deleted). Removes the conversation; if it was
+  active, `active_id` becomes the most-recently-updated remaining conversation,
+  or `null`. → `200 {ok, active_id, conversations}` or `404`.
+- **POST `/api/chat/reset`** `{lesson}` → now means **wipe all** conversations
+  (`conversations: []`, `active_id: null`). Still takes the turn lock
+  non-blocking (`409` if busy). Returns `{ok: true}`.
+
+All POST bodies: `400 {"error":"bad request"}` on missing/non-string required
+fields; `404` unknown lesson; `close_connection` set on the unconsumed-body error
+paths. The same-origin + host-pin guards apply to every `/api/*` route exactly as
+in v1.
+
+### Widget — history + expand UX
+
+The drawer header gains two buttons next to **New chat**:
+
+- **History** (`#dlc-history`) toggles a conversation list (`#dlc-convs`, hidden
+  by default). Opening it re-fetches GET `/api/chat` and renders the rows newest
+  first; each row is a button with the title, a relative-time + message-count
+  meta line, a per-row delete `×` (`.dlc-conv-del`), and `aria-current="true"` +
+  an `is-active` class on the active one.
+- **Expand** (`#dlc-expand`) toggles `#dlc-panel[data-expanded]`, persists the
+  choice in `localStorage["dlc-expanded"]` (`"1"`/`"0"`), and applies it at init.
+  `aria-pressed` mirrors the state and the label/title flips Expand↔Collapse.
+  Expanded, the drawer is wider and the transcript/input sit in a centered
+  reading column.
+
+Behaviour (LIVE mode; bridge/offline unchanged): **init** renders the
+conversation list and the active conversation's messages, and sets the FAB label
+(empty active → "Ask about this lesson"; has messages → "Continue the chat").
+**Send** posts `{lesson, message, conversation: <active id>}`; the active
+conversation's title/`updated_at` may change, so the list is refreshed lazily
+(re-fetched the next time History opens). **New chat** clears the view, switches
+to the new (active) conversation, refreshes the list, focuses the input — no
+`confirm()`. **Switch** (click a row) posts `/api/chat/switch`, loads that
+conversation's messages, marks it active. **Delete** (`× `) `confirm("Delete
+this chat? This removes its transcript.")` then posts `/api/chat/delete`,
+refreshes the list, and loads the new active (or empty) transcript.
+
+**Security:** conversation titles come from user text and are rendered
+**escape-first** (`textContent`/`escHtml`), never via unescaped `innerHTML` — the
+same rule already applied to message bodies. No new `innerHTML` sink receives
+unescaped server/user strings.
 
 ## Accepted v1 tradeoffs
 
