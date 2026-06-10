@@ -12,10 +12,15 @@
     {
       "name": "daily-lesson",
       "source": "./",
-      "description": "Scan recent Claude Code sessions and teach you one thing you relied on but probably don't fully understand. Renders an interactive HTML lesson from a frozen canonical template. Fully local.",
-      "version": "0.2.0",
+      "description": "Scan recent Claude Code sessions and teach you one thing you relied on but probably don't fully understand. Renders an interactive HTML lesson from a frozen canonical template, with an optional per-lesson chat powered by your local claude CLI. Lessons are generated locally; chat answers come from your own claude CLI.",
+      "version": "0.3.0",
       "category": "productivity",
-      "keywords": ["learning", "education", "tutor"]
+      "keywords": [
+        "learning",
+        "education",
+        "tutor",
+        "chat"
+      ]
     }
   ]
 }

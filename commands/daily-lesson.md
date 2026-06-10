@@ -182,19 +182,43 @@ re-skin the existing library, run `python3 "$RENDER" --rebuild-library`.
 
 ---
 
-## Step 7 — Report back to the terminal
+## Step 7 — Bring up the chat server and open the lesson *live*
 
-When done, print:
+Open the lesson **through the local chat server**, not as a bare `file://`, so
+its "Ask about this lesson" chat is live the instant the page loads — no
+separate `/lesson-chat` step. The server is idempotent: `serve.sh` reuses a
+healthy instance and only starts one if needed, so this is safe to run every
+time.
+
+Resolve `serve.sh` the same way you resolved the renderer in Step 5, then ask
+it to ensure the server is up. It prints the base URL on success:
+
+```bash
+SERVE="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/serve.sh}"
+[ -f "$SERVE" ] || SERVE="$(find "$HOME/.claude/plugins/cache" -path '*daily-lesson*/scripts/serve.sh' 2>/dev/null | sort -V | tail -1)"
+BASE="$(sh "$SERVE" 2>/tmp/daily-lesson-serve.err)"   # e.g. http://127.0.0.1:8787
+```
+
+- **If `$BASE` came back** (exit 0): the served lesson URL is
+  `$BASE/<file>` where `<file>` is the `file` field the renderer returned
+  (e.g. `lessons/2026-06-10-rpc-url-trust-base.html`). Open
+  `"$BASE/<file>?chat=1"` in my browser (`open` on macOS, `xdg-open` on Linux;
+  adapt to my platform) — the `?chat=1` makes the chat drawer open on arrival.
+- **If `serve.sh` failed** (non-empty stderr, no URL — e.g. `python3` missing or
+  the port is taken): fall back to the plain file — open
+  `~/.claude/daily-lessons/lessons/<file>.html`. The chat button still appears;
+  it will just show how to start the server. Mention the fallback and the
+  reason (tail `/tmp/daily-lesson-serve.err`).
+
+Then print:
 - the lesson **title**,
 - a **2-sentence teaser**,
-- the saved HTML **file path**, and
-- the exact command to view it: `open ~/.claude/daily-lessons/lessons/<file>.html`
-  (on Linux, `xdg-open`; adapt to my platform).
-- you could immediately run that command to open the lesson in my default browser.
+- the **served URL** I can revisit (`$BASE/<file>`), and a note that chat is
+  live there — same login, plan, and model as my normal sessions.
 
-Then ask if I want you to run that `open` command now. If there was no
-meaningful activity, or nothing new left to teach, write nothing and just say so
-in one line.
+You may run the `open` command for me right away. If there was no meaningful
+activity, or nothing new left to teach, write nothing and just say so in one
+line (and don't bother starting the server).
 
 ---
 
