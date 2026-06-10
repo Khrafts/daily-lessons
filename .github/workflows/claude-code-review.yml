@@ -36,12 +36,16 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Maintain a single updating review comment so every run is visible,
-          # even when there are no inline findings.
-          use_sticky_comment: true
+          # In pull_request (automation) mode the action posts nothing by default and
+          # `use_sticky_comment` is ignored (it is a tag/interactive-mode feature). So we
+          # allow-list the GitHub CLI and have Claude post exactly one summary comment.
+          # `gh` is pre-authenticated inside the action via GITHUB_TOKEN.
+          claude_args: |
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
           prompt: |
-            Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}
-            and post a single summary comment with your findings.
+            Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            Inspect the change with `gh pr diff ${{ github.event.pull_request.number }}`
+            (use `gh pr view` for context); the repo is already checked out, so read any file directly.
 
             Context — this repo is the `daily-lesson` Claude Code plugin, built on these invariants:
             - Page chrome (CSS/JS/layout) is frozen in `assets/*.html`; each run authors only lesson *content*.
@@ -50,11 +54,12 @@ jobs:
             - `concept_key` is the dedup key; exit codes 0 ok / 2 bad input / 3 duplicate / 4 missing assets
               are the command<->renderer contract.
 
-            Your summary comment must include:
-            - One short paragraph: what this PR changes.
-            - Blocking issues — real bugs, correctness problems, or broken invariants (cite file:line).
-            - Suggestions, clearly separated from blocking issues.
-            Keep it concise. If nothing needs changing, say so in one line. Always post the comment.
+            Then post EXACTLY ONE summary comment by running:
+              gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "<your review in markdown>"
+            The comment must include: a one-paragraph overview of what changed; blocking issues
+            (real bugs, correctness problems, or broken invariants, each cited file:line); and
+            suggestions kept clearly separate from blockers. If nothing needs changing, say so in
+            one line. Always post exactly one comment, even on a clean diff.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
