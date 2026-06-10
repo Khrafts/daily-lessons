@@ -1,0 +1,11 @@
+{
+  "name": "daily-lesson-e2e",
+  "private": true,
+  "description": "Playwright end-to-end suite for the daily-lesson chat widget + chat server (mock backend).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

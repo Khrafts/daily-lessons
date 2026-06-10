@@ -193,5 +193,468 @@
   });
 })();
 </script>
+
+<!-- daily-lesson-chat:v1 -->
+<style>
+  /* ---- lesson chat widget (self-contained; safe on legacy pages) ---- */
+  #dlc-fab{
+    position:fixed;right:1.4rem;bottom:1.4rem;z-index:60;
+    display:inline-flex;align-items:center;gap:.5rem;
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
+    background:var(--paper,#fff);color:var(--ink,#111);
+    border:1.5px solid var(--ink,#111);border-radius:999px;padding:.6rem 1.05rem;
+    cursor:pointer;transition:background .15s ease,color .15s ease,transform .15s ease;
+  }
+  #dlc-fab:hover{background:var(--ink,#111);color:var(--paper,#fff);transform:translateY(-1px)}
+  #dlc-fab:focus-visible{outline:2px solid var(--ink,#111);outline-offset:2px}
+  #dlc-fab[hidden]{display:none}
+
+  #dlc-panel{
+    position:fixed;top:0;right:0;z-index:70;
+    height:100vh;height:100dvh;width:420px;width:min(420px,100vw);max-width:100vw;
+    background:var(--paper,#fff);border-left:1.5px solid var(--ink,#111);
+    display:flex;flex-direction:column;
+    font-family:Fraunces,"Iowan Old Style",Georgia,"Times New Roman",serif;color:var(--ink,#111);
+    transform:translateX(100%);visibility:hidden;
+    transition:transform .28s cubic-bezier(.2,.7,.2,1),visibility 0s .28s;
+  }
+  #dlc-panel[data-open="true"]{transform:translateX(0);visibility:visible;transition:transform .28s cubic-bezier(.2,.7,.2,1),visibility 0s 0s}
+  @media (max-width:640px){#dlc-panel{width:100vw}}
+
+  .dlc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:.9rem;padding:1rem 1.1rem;border-bottom:1.5px solid var(--ink,#111);flex:none}
+  .dlc-head-meta{min-width:0;flex:1}
+  #dlc-kicker{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted,#6b6b6b)}
+  #dlc-title{font-weight:600;font-size:1.05rem;line-height:1.35;margin-top:.3rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dlc-actions{display:flex;gap:.8rem;align-items:baseline;flex:none;padding-top:.15rem}
+  #dlc-new,#dlc-close{
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;
+    background:none;border:none;padding:.1rem 0;color:var(--muted,#6b6b6b);cursor:pointer;transition:color .15s;
+  }
+  #dlc-new:hover,#dlc-close:hover{color:var(--ink,#111)}
+  #dlc-new:focus-visible,#dlc-close:focus-visible{outline:2px solid var(--ink,#111);outline-offset:2px}
+
+  #dlc-offline{padding:1.15rem 1.1rem;font-size:.95rem;line-height:1.55;overflow-y:auto}
+  #dlc-offline[hidden]{display:none}
+  #dlc-offline p{margin:.65rem 0}
+  .dlc-off-k{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted,#6b6b6b)}
+  .dlc-off-note{font-size:.85rem;color:var(--muted,#6b6b6b)}
+  #dlc-offline .dlc-copy{margin-left:.35rem;vertical-align:.05em}
+  #dlc-panel.dlc-off #dlc-messages,#dlc-panel.dlc-off #dlc-status,#dlc-panel.dlc-off .dlc-inputrow,#dlc-panel.dlc-off #dlc-new{display:none}
+
+  #dlc-messages{flex:1;overflow-y:auto;padding:0 1.1rem;overscroll-behavior:contain}
+  .dlc-msg{padding:1.1rem 0}
+  .dlc-msg+.dlc-msg{border-top:1px solid var(--line,#e6e6e6)}
+  .dlc-who{display:flex;align-items:center;gap:.5rem;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.6rem;letter-spacing:.16em;text-transform:uppercase;margin-bottom:.5rem}
+  .dlc-user .dlc-who{color:var(--muted,#6b6b6b)}
+  .dlc-assistant .dlc-who{color:var(--ink,#111)}
+  .dlc-assistant .dlc-who::before{content:"";width:1.5rem;height:1.5px;background:var(--ink,#111);flex:none}
+  .dlc-user .dlc-body{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.84rem;line-height:1.6;color:#2a2a2a}
+  .dlc-assistant .dlc-body{font-size:.98rem;line-height:1.6}
+  .dlc-body p{margin:.6rem 0}
+  .dlc-body p:first-child,.dlc-body ul:first-child,.dlc-body ol:first-child{margin-top:0}
+  .dlc-body p:last-child,.dlc-body ul:last-child,.dlc-body ol:last-child{margin-bottom:0}
+  .dlc-body ul,.dlc-body ol{margin:.6rem 0;padding-left:1.25rem}
+  .dlc-body li{margin:.3rem 0}
+  .dlc-body a{color:var(--ink,#111);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+  .dlc-body code,#dlc-offline code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82em;background:var(--code-bg,#fafafa);border:1px solid var(--line,#e6e6e6);border-radius:4px;padding:.05em .35em}
+  .dlc-pre{position:relative;margin:.75rem 0;border:1px solid var(--line,#e6e6e6);border-radius:6px;background:var(--code-bg,#fafafa)}
+  .dlc-pre pre{margin:0;padding:.7rem .8rem;overflow-x:auto}
+  .dlc-pre pre code{background:none;border:none;padding:0;font-size:.76rem;line-height:1.62;display:block;white-space:pre}
+  .dlc-copy{
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;
+    cursor:pointer;border:1px solid var(--line,#e6e6e6);background:var(--paper,#fff);color:var(--muted,#6b6b6b);
+    border-radius:5px;padding:.2rem .5rem;transition:all .14s;
+  }
+  .dlc-pre .dlc-copy{position:absolute;top:.4rem;right:.4rem}
+  .dlc-copy:hover,.dlc-copy.ok{border-color:var(--ink,#111);color:var(--ink,#111)}
+  .dlc-caret{display:inline-block;margin-left:.06em;animation:dlc-blink .9s steps(2,start) infinite}
+  @keyframes dlc-blink{to{visibility:hidden}}
+
+  #dlc-status{flex:none;min-height:1.4rem;padding:.4rem 1.1rem .35rem;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted,#6b6b6b)}
+  #dlc-status.dlc-err{color:var(--ink,#111)}
+  .dlc-dots i{display:inline-block;width:3px;height:3px;border-radius:50%;background:currentColor;margin-left:3px;vertical-align:.12em;animation:dlc-pulse 1.2s ease-in-out infinite}
+  .dlc-dots i:nth-child(2){animation-delay:.2s}
+  .dlc-dots i:nth-child(3){animation-delay:.4s}
+  @keyframes dlc-pulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
+
+  .dlc-inputrow{flex:none;display:flex;align-items:flex-end;gap:.7rem;border-top:1px solid var(--line,#e6e6e6);padding:.85rem 1.1rem}
+  #dlc-input{
+    flex:1;border:none;outline:none;background:transparent;resize:none;padding:0;margin:0;
+    font-family:Fraunces,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    font-size:.95rem;line-height:1.5;color:var(--ink,#111);
+    min-height:1.45rem;max-height:8.6rem;overflow-y:auto;
+  }
+  #dlc-input::placeholder{font-style:italic;color:var(--muted,#6b6b6b)}
+  #dlc-input:disabled{color:var(--muted,#6b6b6b)}
+  #dlc-send{
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;
+    border:1px solid var(--ink,#111);background:var(--paper,#fff);color:var(--ink,#111);
+    border-radius:5px;padding:.4rem .8rem;cursor:pointer;transition:background .15s,color .15s,border-color .15s;
+  }
+  #dlc-send:hover:enabled{background:var(--ink,#111);color:var(--paper,#fff)}
+  #dlc-send:disabled{border-color:var(--line,#e6e6e6);color:var(--muted,#6b6b6b);cursor:default}
+
+  #dlc-messages::-webkit-scrollbar,#dlc-offline::-webkit-scrollbar,#dlc-input::-webkit-scrollbar,.dlc-pre pre::-webkit-scrollbar{width:6px;height:6px}
+  #dlc-messages::-webkit-scrollbar-track,#dlc-offline::-webkit-scrollbar-track,#dlc-input::-webkit-scrollbar-track,.dlc-pre pre::-webkit-scrollbar-track{background:transparent}
+  #dlc-messages::-webkit-scrollbar-thumb,#dlc-offline::-webkit-scrollbar-thumb,#dlc-input::-webkit-scrollbar-thumb,.dlc-pre pre::-webkit-scrollbar-thumb{background:var(--line,#e6e6e6);border-radius:3px}
+  #dlc-messages::-webkit-scrollbar-thumb:hover,.dlc-pre pre::-webkit-scrollbar-thumb:hover{background:var(--ink,#111)}
+
+  @media (prefers-reduced-motion:reduce){
+    #dlc-fab,#dlc-panel{transition:none}
+    #dlc-fab:hover{transform:none}
+    .dlc-caret,.dlc-dots i{animation:none}
+  }
+  @media print{#dlc-fab,#dlc-panel{display:none !important}}
+</style>
+
+<button id="dlc-fab" data-testid="chat-fab" type="button" hidden aria-controls="dlc-panel" aria-expanded="false"><span class="dlc-glyph">&#10043;</span><span id="dlc-fab-label">Ask about this lesson</span></button>
+
+<aside id="dlc-panel" data-testid="chat-panel" data-open="false" role="dialog" aria-label="Lesson chat">
+  <header class="dlc-head">
+    <div class="dlc-head-meta">
+      <div id="dlc-kicker">Lesson chat</div>
+      <div id="dlc-title"></div>
+    </div>
+    <div class="dlc-actions">
+      <button id="dlc-new" data-testid="chat-new" type="button">New chat</button>
+      <button id="dlc-close" data-testid="chat-close" type="button" aria-label="Close chat">&#10005;</button>
+    </div>
+  </header>
+
+  <div id="dlc-offline" data-testid="chat-offline" hidden>
+    <p class="dlc-off-k">Chat server not running</p>
+    <p>No local chat server answered for this page. Start one, then come back:</p>
+    <p><code>/lesson-chat</code><button class="dlc-copy" type="button">Copy</button></p>
+    <p class="dlc-off-note">Run it inside Claude Code &mdash; it starts the server and opens the library at <code>127.0.0.1:8787</code>.</p>
+    <p><code>python3 scripts/chat_server.py</code><button class="dlc-copy" type="button">Copy</button></p>
+    <p class="dlc-off-note">Or, by hand, run that from the plugin folder.</p>
+  </div>
+
+  <div id="dlc-messages" data-testid="chat-messages" role="log" aria-live="polite"></div>
+  <div id="dlc-status" data-testid="chat-status" role="status" aria-live="polite"></div>
+
+  <div class="dlc-inputrow">
+    <textarea id="dlc-input" data-testid="chat-input" rows="1" placeholder="Ask about this lesson&hellip;"></textarea>
+    <button id="dlc-send" data-testid="chat-send" type="button">Send</button>
+  </div>
+</aside>
+
+<script>
+(function(){
+  var fab=document.getElementById('dlc-fab');
+  var fabLabel=document.getElementById('dlc-fab-label');
+  var panel=document.getElementById('dlc-panel');
+  var kicker=document.getElementById('dlc-kicker');
+  var titleEl=document.getElementById('dlc-title');
+  var offline=document.getElementById('dlc-offline');
+  var messages=document.getElementById('dlc-messages');
+  var status=document.getElementById('dlc-status');
+  var input=document.getElementById('dlc-input');
+  var sendBtn=document.getElementById('dlc-send');
+  var newBtn=document.getElementById('dlc-new');
+  var closeBtn=document.getElementById('dlc-close');
+  if(!fab||!fabLabel||!panel||!kicker||!titleEl||!offline||!messages||!status||!input||!sendBtn||!newBtn||!closeBtn) return;
+
+  var BRIDGE='http://127.0.0.1:8787';
+  var file=location.pathname.split('/').pop()||'';
+  var lesson='lessons/'+file;
+  var autoOpen=/[?&]chat=1(?:&|$)/.test(location.search);
+  var mode=null, busy=false, restoring=false, msgCount=0;
+
+  // Identity comes from the rendered DOM, never from render tokens; legacy pages may lack both.
+  try{
+    var nEl=document.querySelector('.meta .n');
+    var num=nEl?(nEl.textContent||'').replace(/[^0-9]/g,''):'';
+    kicker.textContent='Lesson chat'+(num?' · #'+num:'');
+    var h1=document.querySelector('h1');
+    titleEl.textContent=(h1&&(h1.textContent||'').trim())||document.title||'This lesson';
+  }catch(e){}
+
+  // ---- escape-first markdown (assistant turns only) ----
+  function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function inline(s){
+    s=escHtml(s);
+    var spans=[];
+    s=s.replace(/`([^`]+)`/g,function(m,c){spans.push('<code>'+c+'</code>');return '\u0000'+(spans.length-1)+'\u0000';});
+    s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    s=s.replace(/\*([^*]+)\*/g,'<em>$1</em>');
+    s=s.replace(/\u0000(\d+)\u0000/g,function(m,i){return spans[+i];});
+    return s;
+  }
+  function mdToHtml(raw){
+    var lines=String(raw==null?'':raw).replace(/\r\n/g,'\n').split('\n');
+    var out=[], buf=[];
+    function flush(){
+      if(!buf.length) return;
+      var text=buf.join('\n'); buf=[];
+      text.split(/\n\s*\n/).forEach(function(block){
+        var bl=block.split('\n').filter(function(l){return l.trim()!=='';});
+        if(!bl.length) return;
+        function all(re){return bl.every(function(l){return re.test(l);});}
+        if(all(/^\s*- /)){out.push('<ul>'+bl.map(function(l){return '<li>'+inline(l.replace(/^\s*- /,''))+'</li>';}).join('')+'</ul>');}
+        else if(all(/^\s*\d+\. /)){out.push('<ol>'+bl.map(function(l){return '<li>'+inline(l.replace(/^\s*\d+\. /,''))+'</li>';}).join('')+'</ol>');}
+        else{out.push('<p>'+bl.map(inline).join('<br>')+'</p>');}
+      });
+    }
+    for(var i=0;i<lines.length;i++){
+      if(/^\s*```/.test(lines[i])){
+        flush();
+        var code=[]; i++;
+        while(i<lines.length&&!/^\s*```/.test(lines[i])){code.push(lines[i]);i++;}
+        out.push('<div class="dlc-pre"><button class="dlc-copy" type="button">Copy</button><pre><code>'+escHtml(code.join('\n'))+'</code></pre></div>');
+      }else buf.push(lines[i]);
+    }
+    flush();
+    return out.join('');
+  }
+
+  // ---- transcript ----
+  function scrollBottom(){messages.scrollTop=messages.scrollHeight;}
+  function nearBottom(){return messages.scrollHeight-messages.scrollTop-messages.clientHeight<40;}
+  function appendTurn(role,text){
+    var t=document.createElement('div');
+    t.className='dlc-msg '+(role==='assistant'?'dlc-assistant':'dlc-user');
+    var who=document.createElement('div'); who.className='dlc-who';
+    who.textContent=role==='assistant'?'Tutor':'You';
+    var body=document.createElement('div'); body.className='dlc-body';
+    if(role==='assistant') body.innerHTML=mdToHtml(text);              // escaped inside mdToHtml
+    else body.innerHTML=escHtml(text).replace(/\n/g,'<br>');           // escaped above
+    t.appendChild(who); t.appendChild(body);
+    messages.appendChild(t); msgCount++;
+    return body;
+  }
+  function removeTurn(body){
+    var t=body&&body.parentElement;
+    if(t&&t.parentElement){t.parentElement.removeChild(t);msgCount--;}
+  }
+  function setStreaming(body,text){
+    body.innerHTML=mdToHtml(text);
+    var caret=document.createElement('span');
+    caret.className='dlc-caret'; caret.textContent='▍';
+    var last=body.lastElementChild;
+    if(last&&(last.tagName==='UL'||last.tagName==='OL')) last=last.lastElementChild||last;
+    if(last&&last.tagName!=='DIV') last.appendChild(caret); else body.appendChild(caret);
+  }
+
+  // ---- chrome state ----
+  function updateFab(){
+    if(mode==='bridge') fabLabel.textContent='Open lesson chat ↗';
+    else if(mode==='live'&&msgCount>0) fabLabel.textContent='Continue the chat';
+    else fabLabel.textContent='Ask about this lesson';
+  }
+  function syncDisabled(){var d=busy||restoring;input.disabled=d;sendBtn.disabled=d;}
+  function setBusy(b){
+    busy=b; syncDisabled();
+    if(b){status.className='';status.innerHTML='thinking<span class="dlc-dots"><i></i><i></i><i></i></span>';}
+  }
+  function clearStatus(){status.className='';status.textContent='';}
+  function showErr(msg){status.className='dlc-err';status.textContent=msg;}
+  function openPanel(){
+    panel.setAttribute('data-open','true');
+    fab.setAttribute('aria-expanded','true');
+    scrollBottom();
+    if(mode==='live'&&!busy&&!restoring){try{input.focus();}catch(e){}}
+  }
+  function closePanel(){
+    panel.setAttribute('data-open','false');
+    fab.setAttribute('aria-expanded','false');
+    try{fab.focus();}catch(e){}
+  }
+
+  // ---- send: POST /api/chat, read the SSE stream off fetch ----
+  function send(){
+    if(busy||restoring||mode!=='live') return;
+    var msg=(input.value||'').trim();
+    if(!msg) return;
+    input.value=''; input.style.height='auto';
+    appendTurn('user',msg); scrollBottom();
+    setBusy(true); updateFab();
+    var body=appendTurn('assistant','');
+    body.setAttribute('aria-hidden','true'); // announce once on completion, not per delta
+    var acc='', sawDone=false;
+    setStreaming(body,acc); scrollBottom();
+    function finish(text){
+      var stick=nearBottom();
+      body.removeAttribute('aria-hidden');
+      body.innerHTML=mdToHtml(text);
+      clearStatus(); setBusy(false); updateFab();
+      if(stick) scrollBottom();
+      try{input.focus();}catch(e){}
+    }
+    function frame(chunk){
+      var ev='', data=[];
+      chunk.split('\n').forEach(function(ln){
+        if(ln.indexOf('event:')===0) ev=ln.slice(6).trim();
+        else if(ln.indexOf('data:')===0) data.push(ln.slice(5).replace(/^ /,''));
+      });
+      if(!ev) return;
+      var jd={};
+      try{jd=JSON.parse(data.join('\n')||'null')||{};}catch(e){}
+      if(ev==='delta'){
+        if(typeof jd.text==='string'&&jd.text){
+          var stick=nearBottom();
+          acc+=jd.text;setStreaming(body,acc);
+          if(stick) scrollBottom();
+        }
+      }else if(ev==='done'){
+        sawDone=true; finish(typeof jd.text==='string'&&jd.text?jd.text:acc);
+      }else if(ev==='error'){
+        throw new Error(jd.message||'The chat backend reported an error');
+      }
+    }
+    fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lesson:lesson,message:msg})
+    }).then(function(res){
+      if(!res.ok){
+        return res.json().then(
+          function(j){throw new Error((j&&(j.error||j.message))||'Request failed ('+res.status+')');},
+          function(){throw new Error('Request failed ('+res.status+')');});
+      }
+      if(!res.body||!res.body.getReader) throw new Error('Streaming is not supported in this browser');
+      var reader=res.body.getReader(), dec=new TextDecoder(), buf='';
+      function pump(){
+        return reader.read().then(function(r){
+          if(r.done){
+            if(buf.trim()) frame(buf);
+            if(!sawDone){
+              if(acc) finish(acc);
+              else throw new Error('Connection closed before a reply arrived');
+            }
+            return;
+          }
+          buf+=dec.decode(r.value,{stream:true});
+          var i;
+          while((i=buf.indexOf('\n\n'))!==-1){
+            var c=buf.slice(0,i); buf=buf.slice(i+2);
+            if(c.trim()) frame(c);
+          }
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function(e){
+      // Keep the user turn; keep any partial reply, drop an empty one.
+      if(acc){body.removeAttribute('aria-hidden');body.innerHTML=mdToHtml(acc);}else removeTurn(body);
+      setBusy(false); updateFab();
+      showErr((e&&e.message)||'Chat request failed');
+    });
+  }
+
+  // ---- new chat ----
+  function resetChat(){
+    if(mode!=='live'||busy||restoring) return;
+    if(msgCount>0&&!window.confirm('Start a new chat? This clears the saved transcript for this lesson.')) return;
+    fetch('/api/chat/reset',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lesson:lesson})
+    }).then(function(r){
+      if(!r.ok) throw new Error('Reset failed ('+r.status+')');
+      return r.json();
+    }).then(function(){
+      messages.innerHTML=''; msgCount=0;
+      clearStatus(); updateFab();
+      try{input.focus();}catch(e){}
+    }).catch(function(e){
+      showErr((e&&e.message)||'Reset failed');
+    });
+  }
+
+  // ---- copy buttons (delegated: markdown code blocks + offline commands) ----
+  function copyText(text,btn){
+    var ok=function(){btn.textContent='Copied';btn.classList.add('ok');setTimeout(function(){btn.textContent='Copy';btn.classList.remove('ok');},1400);};
+    var fb=function(){
+      var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      try{document.execCommand('copy'); ok();}catch(e){}
+      document.body.removeChild(ta);
+    };
+    if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok).catch(fb);
+    else fb();
+  }
+  panel.addEventListener('click',function(e){
+    var btn=e.target&&e.target.closest?e.target.closest('.dlc-copy'):null;
+    if(!btn) return;
+    var box=btn.closest('.dlc-pre')||btn.parentElement;
+    var code=box?box.querySelector('code'):null;
+    if(code) copyText(code.innerText||code.textContent||'',btn);
+  });
+
+  // ---- modes ----
+  function initLive(){
+    mode='live'; fab.hidden=false; updateFab();
+    restoring=true; syncDisabled(); // no sends until the saved transcript settles
+    fetch('/api/chat?lesson='+encodeURIComponent(lesson)).then(function(r){
+      return r.json();
+    }).then(function(j){
+      if(j&&j.ok&&j.messages&&j.messages.length){
+        j.messages.forEach(function(m){appendTurn(m.role,m.text||'');});
+        scrollBottom();
+      }
+    }).catch(function(){}).then(function(){
+      restoring=false; syncDisabled();
+      updateFab();
+      if(autoOpen) openPanel();
+    });
+  }
+  function initBridge(){mode='bridge';fab.hidden=false;updateFab();}
+  function initOffline(){
+    mode='offline'; fab.hidden=false; updateFab();
+    panel.classList.add('dlc-off'); offline.hidden=false;
+    if(autoOpen) openPanel();
+  }
+  function probe(base,onOk,onFail){
+    var ctrl=null, timer=null;
+    try{ctrl=new AbortController();}catch(e){}
+    if(ctrl) timer=setTimeout(function(){try{ctrl.abort();}catch(e){}},1500);
+    fetch(base+'/api/health',ctrl?{signal:ctrl.signal}:{}).then(function(r){
+      if(!r.ok) throw new Error('unhealthy');
+      return r.json();
+    }).then(function(j){
+      if(timer) clearTimeout(timer);
+      if(j&&j.app==='daily-lesson-chat') onOk(); else onFail();
+    }).catch(function(){
+      if(timer) clearTimeout(timer);
+      onFail();
+    });
+  }
+
+  // ---- wiring ----
+  fab.addEventListener('click',function(){
+    if(mode==='bridge'){location.href=BRIDGE+'/lessons/'+encodeURIComponent(file)+'?chat=1';return;}
+    openPanel();
+  });
+  closeBtn.addEventListener('click',closePanel);
+  newBtn.addEventListener('click',resetChat);
+  sendBtn.addEventListener('click',send);
+  input.addEventListener('keydown',function(e){
+    if(e.isComposing||e.keyCode===229) return; // mid-IME composition
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}
+  });
+  input.addEventListener('input',function(){
+    this.style.height='auto';
+    this.style.height=this.scrollHeight+'px';
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.isComposing||e.keyCode===229) return; // mid-IME composition
+    if((e.key==='Escape'||e.key==='Esc')&&panel.getAttribute('data-open')==='true') closePanel();
+  });
+
+  try{
+    // http(s) is not proof of a live backend: any static server can host a
+    // lesson page. Probe same-origin health before trusting live mode.
+    if(location.protocol==='http:'||location.protocol==='https:') probe('',initLive,initOffline);
+    else probe(BRIDGE,initBridge,initOffline);
+  }catch(e){}
+})();
+</script>
+<!-- /daily-lesson-chat:v1 -->
 </body>
 </html>

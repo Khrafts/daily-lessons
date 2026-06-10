@@ -130,3 +130,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render_lesson.py" --rebuild-library
 ```
 (The lesson *pages* are written once at creation; `--rebuild-library` only
 rebuilds `index.html`. To re-skin old lesson pages too, re-render them.)
+
+---
+
+## The chat widget (shell-owned)
+
+`assets/lesson-shell.html` now carries a chat block delimited by literal
+markers — `<!-- daily-lesson-chat:v1 -->` … `<!-- /daily-lesson-chat:v1 -->` —
+just before `</body>`. It is page **chrome**, owned by the shell exactly like
+the footer: the body contract above is unchanged, and you never write chat
+markup in the body. Lesson pages rendered before the widget existed get the
+same marker-delimited block injected by `scripts/chat_server.py` at serve
+time, so they don't need re-rendering. Word counts are unaffected — the
+renderer counts only the body fragment, never the shell.

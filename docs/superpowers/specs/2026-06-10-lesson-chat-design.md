@@ -66,19 +66,32 @@ preflight from browsers — and the preflight is only approved for `/api/health`
 This blocks drive-by requests from random websites *and* from `file://`/null
 origins, which are indistinguishable from hostile sandboxed iframes.
 
+**Host pinning:** every request's `Host` header must name a loopback origin
+(`127.0.0.1`, `localhost`, `[::1]` — optionally with a port); anything else is
+rejected with 403. This defuses DNS rebinding, where a hostile page's domain
+re-resolves to 127.0.0.1 and its same-"origin" requests reach the server with
+the attacker's hostname in `Host`.
+
+**Transcript privacy:** `chats.json` lives in the lessons dir but is excluded
+from static serving (404). Transcripts are only reachable through the
+same-origin `/api/chat` GET.
+
 **Claude invocation** (per message, one-shot process — no long-lived child):
 
 ```
-claude -p <message>
+claude -p
   --output-format stream-json --verbose --include-partial-messages
   --append-system-prompt <tutor role + full lesson text>
-  [--resume <session_id>]                # continue = resume
-  --allowedTools Read Grep Glob          # can read sibling lessons; nothing else
-  --strict-mcp-config                    # no MCP servers → fast startup
+  [--resume <session_id>]                  # continue = resume
+  --allowedTools Read Grep Glob            # can read sibling lessons; nothing else
+  --strict-mcp-config                      # no MCP servers → fast startup
+  --settings '{"disableAllHooks": true}'   # user hooks never fire inside a chat turn
+  <<< message                              # the message rides on stdin, not argv
 ```
 
-- cwd = the lessons dir; `CLAUDECODE`/`CLAUDE_CODE_*` env stripped so the
-  nested run behaves like a fresh headless session.
+- cwd = the lessons dir; the `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, and
+  `CLAUDE_CODE_SSE_PORT` env vars are stripped so the nested run behaves like
+  a fresh headless session instead of attaching to this one.
 - The lesson's text (HTML → plain text, server-side) rides in
   `--append-system-prompt` on **every** turn, so answers stay grounded even on
   resumed sessions.
@@ -109,8 +122,8 @@ self-contained.
 UX (matches the black-and-white Fraunces/JetBrains Mono canon):
 
 - A fixed bottom-right pill button — `Ask about this lesson` — monochrome,
-  JetBrains Mono uppercase, subtle hover lift. Shows `· continue` when a saved
-  chat exists for this lesson.
+  JetBrains Mono uppercase, subtle hover lift. Reads `Continue the chat` when
+  a saved chat exists for this lesson.
 - Clicking slides in a right-hand drawer (~400px; full-width on mobile):
   header (`Lesson chat · #N`), scrollable transcript, textarea + send.
   Assistant turns render minimal markdown (escape-first; fenced code with copy
@@ -122,7 +135,7 @@ UX (matches the black-and-white Fraunces/JetBrains Mono canon):
 - **Serving-mode awareness:**
   - Page served by `chat_server.py` (http) → fully live.
   - Page opened via `file://` → the widget probes `http://127.0.0.1:8787/api/health`.
-    Server up → the button becomes "open in chat server": one click navigates
+    Server up → the button becomes `Open lesson chat ↗`: one click navigates
     to the same lesson on the server origin (with `?chat=1` to auto-open the
     drawer). Server down → the drawer explains how to start it (`/lesson-chat`
     inside Claude Code, or the `python3 …/chat_server.py` one-liner) with a
@@ -147,9 +160,25 @@ used in `commands/daily-lesson.md`.
   shows it inline in the transcript (not an alert).
 - Child process non-zero exit / malformed stream → `error` event with stderr
   tail; transcript keeps the user's message so retry is one click.
-- Unknown lesson path → 404 JSON. Bad JSON body → 400. Busy lesson → 409.
+- Stale `--resume` session (e.g. the CLI's session store was pruned) →
+  self-heals: if the turn failed before streaming any deltas, the server
+  retries it once without `--resume`, and the chat continues under the fresh
+  session id.
+- Unknown lesson path → 404 JSON. Bad JSON body → 400. Busy lesson → 409 (a
+  reset during an in-flight turn is refused the same way).
 - Server not running (file:// case) → graceful instructions, never a dead
   button.
+
+## Accepted v1 tradeoffs
+
+- `/api/health` is CORS-open, so any website the reader visits can detect
+  that the server is running and which backend it uses. That disclosure is
+  required for `file://` pages to discover the server, and the payload is
+  non-secret (no lesson content, no transcripts, no paths).
+- Two server instances pointed at the same lessons dir can clobber each
+  other's `chats.json` (last write wins). Acceptable for a single-user local
+  tool — and `/lesson-chat` reuses a healthy running instance via
+  `/api/health` instead of double-starting one.
 
 ## Testing
 

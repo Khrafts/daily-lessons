@@ -9,3 +9,9 @@
 
 # PR-reviewer eval scratch (regenerable via setup_fixtures.py; not part of the plugin)
 .claude/skills/daily-lessons-pr-reviewer-workspace/
+
+# e2e suite artifacts (tests/e2e)
+tests/e2e/node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+tests/e2e/.tmp/
