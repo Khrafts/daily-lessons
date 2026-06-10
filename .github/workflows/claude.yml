@@ -23,7 +23,6 @@ jobs:
       pull-requests: read
       issues: read
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,9 +35,13 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-          # This is an optional setting that allows Claude to read CI results on PRs
-          additional_permissions: |
-            actions: read
+          # NOTE: `additional_permissions: actions: read` was removed. It makes the
+          # action mint the GitHub App token with an `actions:read` scope the Claude
+          # App install was not granted, which GitHub rejects with
+          # "400 Bad Request - GitHub validation failed" (the app-token exchange dies
+          # before Claude runs — you get only the 👀 reaction, no review). Re-add it
+          # only after granting the Claude GitHub App the "Actions: read-only"
+          # permission on this repo's installation.
 
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
