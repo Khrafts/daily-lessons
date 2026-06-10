@@ -79,9 +79,12 @@ rejected with 403. This defuses DNS rebinding, where a hostile page's domain
 re-resolves to 127.0.0.1 and its same-"origin" requests reach the server with
 the attacker's hostname in `Host`.
 
-**Transcript privacy:** `chats.json` lives in the lessons dir but is excluded
-from static serving (404). Transcripts are only reachable through the
-same-origin `/api/chat` GET.
+**Transcript privacy:** `chats.json` lives in the library root but is excluded
+from static serving (404, compared against its resolved path so a symlink can't
+slip past). Transcripts are only reachable through the same-origin `/api/chat`
+GET. The tutor subprocess also can't reach it: its `cwd` is the `lessons/`
+subdir (rendered pages only), so `Read`/`Grep`/`Glob` see sibling lessons but
+not the `chats.json` one level up, and the tutor prompt forbids echoing secrets.
 
 **Claude invocation** (per message, one-shot process — no long-lived child):
 
@@ -96,9 +99,12 @@ claude -p
   <<< message                              # the message rides on stdin, not argv
 ```
 
-- cwd = the lessons dir; the `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, and
+- cwd = the `lessons/` subdir (not the library root) so the tool root holds
+  only rendered pages; the `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, and
   `CLAUDE_CODE_SSE_PORT` env vars are stripped so the nested run behaves like
-  a fresh headless session instead of attaching to this one.
+  a fresh headless session instead of attaching to this one. The stored
+  `session_id` is format-checked before it reaches `--resume` (it must start
+  with an alphanumeric, so a hand-edited `chats.json` can't smuggle a flag).
 - The lesson's text (HTML → plain text, server-side) rides in
   `--append-system-prompt` on **every** turn, so answers stay grounded even on
   resumed sessions.
@@ -308,10 +314,16 @@ unescaped server/user strings.
 
 ## Accepted v1 tradeoffs
 
-- `/api/health` is CORS-open, so any website the reader visits can detect
-  that the server is running and which backend it uses. That disclosure is
-  required for `file://` pages to discover the server, and the payload is
-  non-secret (no lesson content, no transcripts, no paths).
+- `/api/health` grants the CORS read header only to `file://` callers
+  (`Origin: null`) — the legitimate discovery case. A real website can still
+  detect the server with a no-cors probe (timing), but cannot read the
+  version/backend body cross-origin. The payload is non-secret anyway (no lesson
+  content, transcripts, or paths).
+- The widget's bridge mode (a `file://` page deep-linking into a running
+  server) targets the default port `127.0.0.1:8787`, baked into the frozen
+  shell. A server started on a non-default port still works for pages served
+  *through* it; only the `file://`→server hand-off assumes the default, because
+  a `file://` page has no way to learn which port the server chose.
 - Two server instances pointed at the same lessons dir can clobber each
   other's `chats.json` (last write wins). Acceptable for a single-user local
   tool — and `/lesson-chat` reuses a healthy running instance via

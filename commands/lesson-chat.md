@@ -1,6 +1,6 @@
 ---
 description: Start the local lesson-chat server and open my lesson library in the browser. Every lesson page gets a live chat powered by the local claude CLI.
-allowed-tools: Bash, Read
+allowed-tools: Bash
 argument-hint: "[optional port, default 8787]"
 ---
 

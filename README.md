@@ -4,7 +4,7 @@
 
 Every run picks a fresh concept (it keeps a ledger so it never repeats itself), grounds the lesson in what *you actually did*, and builds a small library of black-and-white, beautifully typeset lessons over time.
 
-**It runs entirely locally.** It reads your transcripts under `~/.claude/`, writes HTML to `~/.claude/daily-lessons/`, and never sends anything anywhere.
+**Lesson generation runs entirely on your machine** — it reads your transcripts under `~/.claude/`, writes HTML to `~/.claude/daily-lessons/`, and uploads nothing. The optional per-lesson chat answers through your local `claude` CLI, so it makes the same network calls any Claude Code session does — under your own account, no API key, and nothing more.
 
 ---
 

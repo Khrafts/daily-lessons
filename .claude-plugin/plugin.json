@@ -1,6 +1,6 @@
 {
   "name": "daily-lesson",
-  "description": "Mines your recent Claude Code sessions and teaches you one concept you relied on but probably don't fully understand — rendered as a self-contained, interactive HTML lesson from a frozen canonical template, so every install looks identical — then lets you chat with any lesson through your local claude CLI. Runs entirely locally; nothing leaves your machine.",
+  "description": "Mines your recent Claude Code sessions and teaches you one concept you relied on but probably don't fully understand — rendered as a self-contained, interactive HTML lesson from a frozen canonical template, so every install looks identical — then lets you chat with any lesson through your local claude CLI. Lesson generation is fully local; chat answers come from your own claude CLI, the same network calls any Claude Code session makes.",
   "version": "0.3.0",
   "author": {
     "name": "khrafts",
@@ -17,6 +17,7 @@
     "self-improvement",
     "html",
     "claude-code",
-    "productivity"
+    "productivity",
+    "chat"
   ]
 }

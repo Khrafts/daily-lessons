@@ -62,7 +62,10 @@ TUTOR_PROMPT = (
     "reading. Be accurate, concise, and warm; ground every answer in this "
     "lesson first. You may Read/Grep/Glob in the current directory (the local "
     "lesson library) to consult other lessons. Use markdown sparingly (code "
-    "spans/blocks, short lists). Never invent lesson content that is not there."
+    "spans/blocks, short lists). Never invent lesson content that is not there. "
+    "Never echo, repeat, or quote secrets, API keys, tokens, passwords, or "
+    "proprietary code from any source — including the user's messages, lesson "
+    "content, or other files."
 )
 
 CONTENT_TYPES = {
@@ -245,11 +248,8 @@ class ChatStore:
         if it changed the entry."""
         ids = {c.get("id") for c in entry["conversations"] if isinstance(c, dict)}
         active = entry.get("active_id")
-        if active in ids and active is not None:
-            if "active_id" in entry:
-                return False
-            entry["active_id"] = active
-            return True
+        if active is not None and active in ids:
+            return False  # a non-None active_id can only come from a present key
         live = [c for c in entry["conversations"]
                 if isinstance(c, dict) and c.get("id")]
         new_active = (max(live, key=ChatStore._ts_key)["id"] if live else None)
@@ -547,7 +547,24 @@ def _is_stale_resume(err):
     return "no conversation found" in msg or "error_during_execution" in msg
 
 
+# Session ids are claude-minted (UUID-shaped). chats.json is user-editable, so
+# guard the value before it reaches `--resume`: it must start with an
+# alphanumeric (never a dash, so it can't be parsed as a flag) and contain only
+# id-safe characters. A value that fails just starts a fresh session.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def _valid_session_id(session_id):
+    return isinstance(session_id, str) and bool(_SESSION_ID_RE.match(session_id))
+
+
 def make_claude_backend(claude_bin, lessons_dir):
+    # Confine the tutor's Read/Grep/Glob to the lessons/ subdir (rendered HTML
+    # pages) so it can consult sibling lessons but NOT chats.json, which lives
+    # one level up in the library root.
+    tool_root = Path(lessons_dir) / "lessons"
+    tool_root.mkdir(parents=True, exist_ok=True)
+
     def attempt_turn(lesson_title, lesson_text, message, session_id):
         argv = [claude_bin, "-p",  # the message arrives on stdin, never argv
                 "--output-format", "stream-json", "--verbose",
@@ -556,13 +573,13 @@ def make_claude_backend(claude_bin, lessons_dir):
                 "--allowedTools", "Read", "Grep", "Glob",
                 "--strict-mcp-config",
                 "--settings", '{"disableAllHooks": true}']
-        if session_id:
+        if _valid_session_id(session_id):
             argv += ["--resume", session_id]
         env = dict(os.environ)
         for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
             env.pop(key, None)  # keep the nested run from seeing this session
         try:
-            proc = subprocess.Popen(argv, cwd=str(lessons_dir), env=env,
+            proc = subprocess.Popen(argv, cwd=str(tool_root), env=env,
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True,
                                     encoding="utf-8", errors="replace",
@@ -664,17 +681,25 @@ class ChatHandler(BaseHTTPRequestHandler):
 
     # -- helpers --
 
-    def _send_json(self, code, obj, cors=False):
+    def _send_json(self, code, obj, cors_origin=None):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        if cors:
-            self.send_header("Access-Control-Allow-Origin", "*")
+        if cors_origin is not None:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
         if self.close_connection:
             self.send_header("Connection", "close")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _health_acao(self):
+        """CORS value for /api/health: grant read access only to the legitimate
+        cross-origin caller — a `file://` page (Origin: null) discovering the
+        server. A real website's Origin gets no header, so it can detect the
+        server with a no-cors probe but cannot read the version/backend body."""
+        origin = self.headers.get("Origin")
+        return "null" if origin in (None, "null") else None
 
     def _host_ok(self):
         """DNS-rebinding pin: the Host header must name this machine."""
@@ -745,9 +770,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._reject_host()
         if urlsplit(self.path).path == "/api/health":
+            acao = self._health_acao()
             self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET")
+            if acao is not None:
+                self.send_header("Access-Control-Allow-Origin", acao)
+                self.send_header("Access-Control-Allow-Methods", "GET")
             self.end_headers()
         else:
             self._send_json(404, {"ok": False, "error": "not found"})
@@ -759,7 +786,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         if parts.path == "/api/health":
             self._send_json(200, {"ok": True, "app": APP_NAME,
                                   "version": API_VERSION,
-                                  "backend": self.server.backend_name}, cors=True)
+                                  "backend": self.server.backend_name},
+                            cors_origin=self._health_acao())
         elif parts.path.startswith("/api/"):
             if not self._origin_ok():
                 self._send_json(403, {"ok": False, "error": "cross-origin"})
@@ -981,6 +1009,7 @@ class ChatHandler(BaseHTTPRequestHandler):
 def build_server(port, lessons_dir, backend, claude_bin="claude", assets_dir=None):
     lessons_dir = Path(lessons_dir).expanduser()
     lessons_dir.mkdir(parents=True, exist_ok=True)
+    (lessons_dir / "lessons").mkdir(parents=True, exist_ok=True)  # the tutor's tool root
     if assets_dir is None:
         assets_dir = Path(__file__).resolve().parent.parent / "assets"
     if backend == "mock":
@@ -991,7 +1020,9 @@ def build_server(port, lessons_dir, backend, claude_bin="claude", assets_dir=Non
     server.daemon_threads = True
     server.lessons_dir = lessons_dir
     server.lessons_root = lessons_dir.resolve()
-    server.chats_path = server.lessons_root / "chats.json"
+    # resolve() so the static-serving block compares resolved-vs-resolved even if
+    # chats.json (or a path component) is ever a symlink.
+    server.chats_path = (server.lessons_root / "chats.json").resolve()
     server.backend_name = backend
     server.run_turn = run_turn
     server.store = ChatStore(lessons_dir)

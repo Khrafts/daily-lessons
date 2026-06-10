@@ -5,6 +5,7 @@ lessons dir; never touches the real library or the claude CLI."""
 
 import http.client
 import json
+import os
 import shutil
 import socket
 import sys
@@ -147,17 +148,30 @@ class HttpApiTests(unittest.TestCase):
     def test_health(self):
         status, headers, data = request(self.port, "GET", "/api/health")
         self.assertEqual(status, 200)
-        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
         self.assertEqual(json.loads(data),
                          {"ok": True, "app": "daily-lesson-chat",
                           "version": 1, "backend": "mock"})
+        # no Origin (curl) and a file:// page (Origin: null) may read it
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "null")
+        _, h_null, _ = request(self.port, "GET", "/api/health",
+                               headers={"Origin": "null"})
+        self.assertEqual(h_null.get("Access-Control-Allow-Origin"), "null")
+        # a real cross-origin website gets the body but NO CORS header
+        _, h_web, web = request(self.port, "GET", "/api/health",
+                                headers={"Origin": "https://evil.example"})
+        self.assertIsNone(h_web.get("Access-Control-Allow-Origin"))
+        self.assertTrue(json.loads(web)["ok"])
 
     def test_health_options(self):
         status, headers, data = request(self.port, "OPTIONS", "/api/health")
         self.assertEqual(status, 204)
-        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "null")
         self.assertEqual(headers.get("Access-Control-Allow-Methods"), "GET")
         self.assertEqual(data, b"")
+        # a real website's preflight is not granted
+        _, h_web, _ = request(self.port, "OPTIONS", "/api/health",
+                              headers={"Origin": "https://evil.example"})
+        self.assertIsNone(h_web.get("Access-Control-Allow-Origin"))
 
     # (2) origin policy
 
@@ -1104,7 +1118,8 @@ FAKE_CLAUDE = '''#!/usr/bin/env python3
 import json, os, sys
 d = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(d, "calls.jsonl"), "a") as f:
-    f.write(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}) + "\\n")
+    f.write(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read(),
+                        "cwd": os.getcwd()}) + "\\n")
 mode = open(os.path.join(d, "mode.txt")).read().strip()
 STALE = {"type": "result", "subtype": "error_during_execution", "is_error": True,
          "errors": ["No conversation found with session ID: stale-sid"]}
@@ -1188,6 +1203,22 @@ class ClaudeBackendTests(unittest.TestCase):
         argv = self.calls()[0]["argv"]
         self.assertIn("--resume", argv)
         self.assertEqual(argv[argv.index("--resume") + 1], "sid-123")
+
+    # tool root is the lessons/ subdir, so chats.json (one level up) is out of reach
+
+    def test_tool_root_is_lessons_subdir(self):
+        self.set_mode("success")
+        self.turn()
+        self.assertTrue(self.calls()[0]["cwd"].endswith(os.sep + "lessons"))
+
+    # a malformed (user-edited) session id is never passed to --resume
+
+    def test_invalid_session_id_not_resumed(self):
+        self.set_mode("success")
+        for bad in ("--dangerous-flag", "../escape", "has space", ""):
+            (self.tmp / "calls.jsonl").unlink(missing_ok=True)
+            self.turn(session_id=bad)
+            self.assertNotIn("--resume", self.calls()[0]["argv"])
 
     # (c) nonzero exit surfaces code + stderr
 
