@@ -29,6 +29,9 @@ That's it. The `/daily-lesson` command is now available.
 /daily-lesson                 # teach me something from my most recent day of work
 /daily-lesson 2026-06-03      # target a specific day (YYYY-MM-DD)
 /daily-lesson back            # skip the most recent day, start one day earlier
+/daily-lesson deep            # one-off: write just this lesson in a chosen mode
+/lesson-mode                  # show the current lecture mode and the menu
+/lesson-mode tutorial         # set the default mode for future lessons
 ```
 
 When it finishes it prints the lesson title, a teaser, and the path to the HTML
@@ -48,6 +51,44 @@ file — then offers to open it in your browser.
 
 Each lesson covers: what it is → why it mattered in *your* session → the mental
 model → a worked example → common pitfalls → go-deeper pointers + a self-check.
+
+---
+
+## Lesson modes — pick the voice and depth
+
+The same lesson can be written in different **modes**. They share the six
+sections, the frozen HTML, and the one-concept-from-your-real-session soul — only
+the **tone** and the **depth of exposure** change, so you read in the register
+you actually want.
+
+| Mode | What it reads like | Depth |
+|------|--------------------|-------|
+| **Grounded** ⭐ | A senior colleague at a whiteboard — teaches the concept and cites your real session as evidence, honestly attributed. | standard (~600–900w) |
+| **Tutorial** | A calm, blog-style explainer; your session is the silent reason the topic was picked, not a story you star in. | standard (~650–950w) |
+| **Deep Dive** | A reference chapter — full derivation, edge cases, two worked examples; for when you want to truly master it. | long (~1000–1500w) |
+| **Briefing** | A terse staff-engineer memo — maximum signal per word, the concept and the episode as facts, zero ornament. | compact (~350–600w) |
+
+```
+/lesson-mode                  # show your current mode and the menu
+/lesson-mode deep             # set the default for future lessons
+/daily-lesson briefing        # …or use a mode just once, without changing the default
+```
+
+**Grounded is the default** — it's the safest voice for a daily habit: it keeps
+the lesson tied to *your* day without dramatising it. **Tutorial** drops the
+session framing entirely if you'd rather read a clean concept explainer;
+**Deep Dive** and **Briefing** flex the depth.
+
+Two guarantees bind **every** mode, the default included:
+
+- **Never obscure** — whatever the tone, the concept is defined plainly and leads
+  every section; voice is seasoning on a clear explanation, never a substitute.
+- **Honest attribution** — a lesson says "you" only for what *you* genuinely did
+  or decided. Work the **agent or tooling** did is named in the third person, so
+  a lesson never credits you with a command the agent ran.
+
+Your choice is saved in `~/.claude/daily-lessons/config.json`; mode definitions
+are canon in `references/lesson-modes.md` (edit there to retune a mode).
 
 ---
 
@@ -96,6 +137,7 @@ gain the chat button automatically when viewed through the server.
 ~/.claude/daily-lessons/
 ├── index.json                               # the ledger (dedup source of truth)
 ├── index.html                               # the library landing page
+├── config.json                              # preferences (e.g. your lecture mode)
 ├── chats.json                               # per-lesson chat transcripts + session ids
 └── lessons/
     └── YYYY-MM-DD-<slug>.html               # one self-contained lesson per run

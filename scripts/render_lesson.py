@@ -26,7 +26,8 @@ meta.json shape:
     "source_day": "2026-06-06",                  # the session day mined
     "taught_at": "2026-06-07T01:52:09+01:00",    # ISO 8601
     "tags": ["evm", "solidity"],
-    "word_count": 1050                            # optional; computed if absent
+    "word_count": 1050,                           # optional; computed if absent
+    "mode": "grounded"                            # optional; lecture-mode provenance
   }
 
 body.html: the inner HTML of the article (sections 01..06 + self-check), using
@@ -186,6 +187,11 @@ def main():
         "file": file_rel,
         "word_count": wc,
     }
+    # `mode` is the lecture mode the lesson was written in (tutorial/grounded/
+    # deep/briefing). Optional provenance: record it only when present so
+    # pre-mode lessons keep a clean record.
+    if meta.get("mode"):
+        record["mode"] = meta["mode"]
     ledger.append(record)
     n = len(ledger)  # lesson number (chronological)
 
@@ -207,6 +213,7 @@ def main():
         "file": file_rel,
         "path": str(out_path),
         "word_count": wc,
+        "mode": record.get("mode"),
     }))
 
 
