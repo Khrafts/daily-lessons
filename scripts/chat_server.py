@@ -812,9 +812,16 @@ def _extract_json(text):
 
 
 def _claude_recast_generate(claude_bin, tool_root, system_prompt, message):
+    # Pure text generation: grant NO tools at all. `--tools ""` disables the
+    # entire built-in tool set (`--allowedTools` is additive with the user's
+    # settings and can't restrict below them; only `--tools`/`--disallowedTools`
+    # actually remove a tool), and `--strict-mcp-config` (with no --mcp-config)
+    # blocks MCP tools — so injected lesson content fed as the message can never
+    # reach Bash/Write/Workflow/etc. or escalate via a spawned sub-agent.
     argv = [claude_bin, "-p",
             "--output-format", "stream-json", "--verbose",
             "--append-system-prompt", system_prompt,
+            "--tools", "",
             "--strict-mcp-config",
             "--settings", '{"disableAllHooks": true}']
     env = dict(os.environ)
