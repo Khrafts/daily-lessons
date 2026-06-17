@@ -47,6 +47,19 @@ from pathlib import Path
 REQUIRED_META = ["slug", "concept_key", "title", "dek", "one_liner",
                  "source_day", "taught_at", "tags"]
 
+# Display labels for the lecture modes; a rendition with no mode (pre-mode or
+# legacy lessons) is shown as the "Original" tone in the library.
+MODE_LABELS = {
+    "grounded": "Grounded",
+    "tutorial": "Tutorial",
+    "deep": "Deep Dive",
+    "briefing": "Briefing",
+}
+
+
+def mode_label(mode):
+    return MODE_LABELS.get(mode or "", "Original")
+
 
 def die(msg, code):
     sys.stderr.write(f"render_lesson: {msg}\n")
@@ -85,7 +98,22 @@ def render_lesson_html(shell, *, n, title, taught_date, source_day, tags, dek, b
     return out
 
 
-def render_row(row_tpl, rec, n):
+def render_tones(renditions):
+    """Tone-switch links for a concept with more than one rendition.
+
+    Returns '' for a single-rendition concept so single-tone lessons (and all
+    pre-variant libraries) render exactly as before.
+    """
+    if not renditions or len(renditions) < 2:
+        return ""
+    links = "".join(
+        f'<a class="tone" href="{r["file"]}">{esc(mode_label(r.get("mode")))}</a>'
+        for r in renditions
+    )
+    return f'      <div class="tones"><span class="tones-label">tones</span>{links}</div>'
+
+
+def render_row(row_tpl, rec, n, renditions=None):
     tag_spans = "\n".join(f'        <span class="tag">{esc(t)}</span>'
                           for t in rec.get("tags", []))
     out = row_tpl.rstrip("\n")
@@ -96,16 +124,39 @@ def render_row(row_tpl, rec, n):
     out = out.replace("{{TITLE}}", esc(rec["title"]))
     out = out.replace("{{ONE_LINER}}", esc(rec["one_liner"]))
     out = out.replace("{{TAGS}}", tag_spans)
+    out = out.replace("{{TONES}}", render_tones(renditions))
     return out
+
+
+def group_by_concept(ledger):
+    """Group ledger records by concept_key, first-seen order preserved.
+
+    Returns a list of dicts: {primary_n (1-based ledger index of the first
+    rendition), primary (record), renditions (all records for the concept)}.
+    Records without a concept_key are each their own group (defensive).
+    """
+    groups = {}
+    order = []
+    for i, rec in enumerate(ledger):
+        ck = rec.get("concept_key") or f"__id::{rec.get('id', i)}"
+        g = groups.get(ck)
+        if g is None:
+            g = {"primary_n": i + 1, "primary": rec, "renditions": []}
+            groups[ck] = g
+            order.append(ck)
+        g["renditions"].append(rec)
+    return [groups[ck] for ck in order]
 
 
 def regenerate_library(ledger, assets_dir, lessons_dir):
     shell = read_template(assets_dir, "library-shell.html")
     row_tpl = read_template(assets_dir, "library-row.html")
-    # ledger is chronological (append order); N = 1-based position; show newest first
-    numbered = [(i + 1, rec) for i, rec in enumerate(ledger)]
-    rows = [render_row(row_tpl, rec, n) for n, rec in reversed(numbered)]
-    count = len(ledger)
+    # One row per concept (renditions of the same concept_key are grouped, with
+    # their alternate tones linked from the row). Newest concept first.
+    groups = group_by_concept(ledger)
+    rows = [render_row(row_tpl, g["primary"], g["primary_n"], g["renditions"])
+            for g in reversed(groups)]
+    count = len(groups)
     count_line = f"Lesson {count} of an ever-growing pile."
     out = shell.replace("{{COUNT_LINE}}", esc(count_line))
     out = out.replace("{{ROWS}}", "\n\n".join(rows))
@@ -141,6 +192,10 @@ def main():
                     help="canonical templates dir (default: ../assets next to this script)")
     ap.add_argument("--rebuild-library", action="store_true",
                     help="regenerate index.html from the existing ledger and exit")
+    ap.add_argument("--variant", action="store_true",
+                    help="render an alternate-tone rendition of an existing concept: "
+                         "dedup on (concept_key, mode) instead of concept_key, write a "
+                         "mode-suffixed file, and link it to the primary rendition")
     args = ap.parse_args()
 
     assets_dir = (Path(args.assets_dir).expanduser() if args.assets_dir
@@ -165,14 +220,35 @@ def main():
         die(f"meta.json missing required keys: {', '.join(missing)}", 2)
 
     concept_key = meta["concept_key"]
-    if any(r.get("concept_key") == concept_key for r in ledger):
-        die(f"concept_key already taught: {concept_key}", 3)
+    mode = meta.get("mode") or None
+    same_concept = [r for r in ledger if r.get("concept_key") == concept_key]
 
     body = Path(args.body).expanduser().read_text(encoding="utf-8").rstrip("\n")
     taught_date = meta["taught_at"][:10]
     slug = meta["slug"]
-    file_rel = f"lessons/{taught_date}-{slug}.html"
     wc = int(meta.get("word_count") or word_count_of(body))
+
+    if args.variant:
+        # An alternate-tone rendition of a concept that already exists. Uniqueness
+        # is (concept_key, mode): a different tone is allowed, the same tone is a
+        # duplicate. It shares the primary's lesson number and links back to it.
+        if not mode:
+            die("--variant needs a 'mode' in meta.json (the alternate tone)", 2)
+        if not same_concept:
+            die(f"--variant of an unknown concept_key: {concept_key}", 2)
+        if any((r.get("mode") or "") == mode for r in same_concept):
+            die(f"concept already has a '{mode}' rendition: {concept_key}", 3)
+        primary = same_concept[0]
+        page_n = ledger.index(primary) + 1
+        file_rel = f"lessons/{taught_date}-{slug}-{mode}.html"
+        variant_of = primary.get("id")
+    else:
+        # A fresh concept. concept_key stays a hard dedup key for the daily flow.
+        if same_concept:
+            die(f"concept_key already taught: {concept_key}", 3)
+        file_rel = f"lessons/{taught_date}-{slug}.html"
+        variant_of = None
+        page_n = None  # the chronological position, filled in after append
 
     seq = sum(1 for r in ledger if str(r.get("id", "")).startswith(taught_date)) + 1
     record = {
@@ -189,15 +265,19 @@ def main():
     }
     # `mode` is the lecture mode the lesson was written in (tutorial/grounded/
     # deep/briefing). Optional provenance: record it only when present so
-    # pre-mode lessons keep a clean record.
-    if meta.get("mode"):
-        record["mode"] = meta["mode"]
+    # pre-mode lessons keep a clean record. `variant_of` links an alternate-tone
+    # rendition to its primary (the first rendition of the concept).
+    if mode:
+        record["mode"] = mode
+    if variant_of:
+        record["variant_of"] = variant_of
     ledger.append(record)
-    n = len(ledger)  # lesson number (chronological)
+    if page_n is None:
+        page_n = len(ledger)  # lesson number (chronological)
 
     shell = read_template(assets_dir, "lesson-shell.html")
     page = render_lesson_html(
-        shell, n=n, title=meta["title"], taught_date=taught_date,
+        shell, n=page_n, title=meta["title"], taught_date=taught_date,
         source_day=meta["source_day"], tags=meta["tags"], dek=meta["dek"], body=body)
 
     out_path = lessons_dir / file_rel
@@ -209,11 +289,12 @@ def main():
     print(json.dumps({
         "ok": True,
         "title": meta["title"],
-        "lesson_number": n,
+        "lesson_number": page_n,
         "file": file_rel,
         "path": str(out_path),
         "word_count": wc,
         "mode": record.get("mode"),
+        "variant_of": record.get("variant_of"),
     }))
 
 

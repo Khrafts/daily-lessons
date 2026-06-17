@@ -209,3 +209,20 @@ before you render. The test: *is there a user message or user-authored edit this
 `/lesson-mode` writes this file (merging, so unrelated keys survive). It is the
 forward-compatible home for future preferences (language, length, port). Lessons
 written before this feature simply default to `grounded`.
+
+---
+
+## Alternate-tone renditions (recast)
+
+A concept can be held in more than one tone at once. `/lesson-recast <mode>`
+re-renders an existing lesson's concept in another mode and persists it as a
+**sibling** rendition — same `concept_key`, a mode-suffixed filename, linked to
+the primary via a `variant_of` field. The renderer's `--variant` path enforces
+uniqueness on **(concept_key, mode)**: the same concept in a *different* tone is
+allowed, the same tone twice is a duplicate (exit 3). The library groups all
+renditions of a concept into a single row with a tone switcher, so each tone is
+retrievable just like the original. Recast re-voices the *existing* lesson — it
+never re-mines sessions — and the attribution rule still applies, so it's also
+the way to fix a pre-modes lesson that mis-credited the user with the agent's
+work. The daily picker still dedups on `concept_key` alone, so auto-generated
+lessons never repeat a concept regardless of how many tones it has.

@@ -90,6 +90,24 @@ Two guarantees bind **every** mode, the default included:
 Your choice is saved in `~/.claude/daily-lessons/config.json`; mode definitions
 are canon in `references/lesson-modes.md` (edit there to retune a mode).
 
+### Recast a saved lesson into another tone
+
+Already have a lesson and want it in a different voice? **Recast** it — the same
+concept, re-written in another mode, persisted as a sibling you open just like
+the original:
+
+```
+/lesson-recast tutorial          # recast your most recent lesson into Tutorial
+/lesson-recast deep erc7201      # recast a specific lesson (by slug/title words) into Deep Dive
+```
+
+Recasting reads the existing lesson — it does **not** re-scan your sessions —
+re-voices it in the new mode, and saves it next to the original. The library
+then **groups both under one concept** with a tone switcher, so *"ERC-7201 →
+Grounded · Tutorial"* are one click apart. The original is never overwritten, and
+since the attribution rule still applies, recasting a pre-modes lesson is also a
+clean way to fix one that mis-credited you with the agent's work.
+
 ---
 
 ## Chat with your lessons
