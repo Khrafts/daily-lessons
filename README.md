@@ -108,6 +108,15 @@ Grounded · Tutorial"* are one click apart. The original is never overwritten, a
 since the attribution rule still applies, recasting a pre-modes lesson is also a
 clean way to fix one that mis-credited you with the agent's work.
 
+**Or do it right from the lesson page.** When a lesson is open through the local
+server, a **Tone** bar sits under the title: the tones you already have are
+chips you click to **switch** between them, and the tones you don't yet have are
+`+` buttons that **generate** that version on the spot (via your local `claude`)
+and open it when it's ready. Each tone is its own page, so **each keeps its own
+chat history** and all the usual lesson features — switching tones never loses a
+conversation. (The bar only appears when the page is served by the local
+server; over `file://` there's nothing to generate against.)
+
 ---
 
 ## Chat with your lessons
