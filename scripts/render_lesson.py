@@ -33,7 +33,10 @@ meta.json shape:
 body.html: the inner HTML of the article (sections 01..06 + self-check), using
 ONLY the canonical component markup documented in references/lesson-format.md.
 
-Stdout: a JSON summary {ok, title, lesson_number, file, path, word_count}.
+Stdout: a JSON summary {ok, title, lesson_number, file, path, word_count,
+mode, variant_of}. `mode` is the lecture-mode provenance (null for pre-mode
+lessons); `variant_of` links an alternate-tone rendition to its primary (null
+otherwise).
 Exit codes: 0 ok · 2 bad input · 3 duplicate concept_key · 4 missing assets.
 """
 

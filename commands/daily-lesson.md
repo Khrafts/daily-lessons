@@ -211,7 +211,7 @@ First read the component contract — it's short and exact:
    ```
    It writes `~/.claude/daily-lessons/lessons/<date>-<slug>.html`, appends the
    ledger entry, and regenerates the library — deterministically — then prints
-   JSON `{ok, title, lesson_number, file, path, word_count}` for Step 7.
+   JSON `{ok, title, lesson_number, file, path, word_count, mode, variant_of}` for Step 7.
 
 Exit codes to handle: `0` ok · `2` bad/missing meta fields (fix, retry) · `3` the
 `concept_key` is already taught (go back to Step 2/3 and pick another) · `4`
