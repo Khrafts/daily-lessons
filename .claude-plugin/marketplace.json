@@ -12,8 +12,8 @@
     {
       "name": "daily-lesson",
       "source": "./",
-      "description": "Scan recent Claude Code sessions and teach you one thing you relied on but probably don't fully understand. Renders an interactive HTML lesson from a frozen canonical template — in your choice of lecture mode (tone + depth) — with an optional per-lesson chat powered by your local claude CLI. Lessons are generated locally; chat answers come from your own claude CLI.",
-      "version": "0.4.0",
+      "description": "Scan recent Claude Code sessions and teach you one thing you relied on but probably don't fully understand. Renders an interactive HTML lesson from a frozen canonical template — in your choice of lecture mode (tone + depth), switchable and generatable right from the lesson page — with an optional per-lesson chat powered by your local claude CLI. Lessons are generated locally; chat answers come from your own claude CLI.",
+      "version": "0.6.0",
       "category": "productivity",
       "keywords": [
         "learning",
