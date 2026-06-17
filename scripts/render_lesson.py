@@ -107,7 +107,7 @@ def render_tones(renditions):
     if not renditions or len(renditions) < 2:
         return ""
     links = "".join(
-        f'<a class="tone" href="{r["file"]}">{esc(mode_label(r.get("mode")))}</a>'
+        f'<a class="tone" href="{esc(r["file"])}">{esc(mode_label(r.get("mode")))}</a>'
         for r in renditions
     )
     return f'      <div class="tones"><span class="tones-label">tones</span>{links}</div>'
@@ -117,7 +117,7 @@ def render_row(row_tpl, rec, n, renditions=None):
     tag_spans = "\n".join(f'        <span class="tag">{esc(t)}</span>'
                           for t in rec.get("tags", []))
     out = row_tpl.rstrip("\n")
-    out = out.replace("{{FILE}}", rec["file"])
+    out = out.replace("{{FILE}}", esc(rec["file"]))
     out = out.replace("{{N}}", str(n))
     out = out.replace("{{TAUGHT_DATE}}", esc(rec["taught_at"][:10]))
     out = out.replace("{{SOURCE_DAY}}", esc(rec["source_day"]))
@@ -131,8 +131,9 @@ def render_row(row_tpl, rec, n, renditions=None):
 def group_by_concept(ledger):
     """Group ledger records by concept_key, first-seen order preserved.
 
-    Returns a list of dicts: {primary_n (1-based ledger index of the first
-    rendition), primary (record), renditions (all records for the concept)}.
+    Returns a list of dicts: {primary_n (1-based CONCEPT ordinal — its
+    first-appearance order, NOT its raw ledger index, so tone variants don't
+    create gaps), primary (record), renditions (all records for the concept)}.
     Records without a concept_key are each their own group (defensive).
     """
     groups = {}
@@ -141,9 +142,11 @@ def group_by_concept(ledger):
         ck = rec.get("concept_key") or f"__id::{rec.get('id', i)}"
         g = groups.get(ck)
         if g is None:
-            g = {"primary_n": i + 1, "primary": rec, "renditions": []}
-            groups[ck] = g
             order.append(ck)
+            # ordinal = position in first-appearance order; matches the page's
+            # #N and keeps the library's count line consistent with the rows.
+            g = {"primary_n": len(order), "primary": rec, "renditions": []}
+            groups[ck] = g
         g["renditions"].append(rec)
     return [groups[ck] for ck in order]
 
@@ -236,19 +239,18 @@ def main():
             die("--variant needs a 'mode' in meta.json (the alternate tone)", 2)
         if not same_concept:
             die(f"--variant of an unknown concept_key: {concept_key}", 2)
+        # A legacy/no-mode rendition counts as a distinct tone here ("" != mode),
+        # so a pre-modes lesson can still be recast into any named mode.
         if any((r.get("mode") or "") == mode for r in same_concept):
             die(f"concept already has a '{mode}' rendition: {concept_key}", 3)
-        primary = same_concept[0]
-        page_n = ledger.index(primary) + 1
         file_rel = f"lessons/{taught_date}-{slug}-{mode}.html"
-        variant_of = primary.get("id")
+        variant_of = same_concept[0].get("id")
     else:
         # A fresh concept. concept_key stays a hard dedup key for the daily flow.
         if same_concept:
             die(f"concept_key already taught: {concept_key}", 3)
         file_rel = f"lessons/{taught_date}-{slug}.html"
         variant_of = None
-        page_n = None  # the chronological position, filled in after append
 
     seq = sum(1 for r in ledger if str(r.get("id", "")).startswith(taught_date)) + 1
     record = {
@@ -272,8 +274,18 @@ def main():
     if variant_of:
         record["variant_of"] = variant_of
     ledger.append(record)
-    if page_n is None:
-        page_n = len(ledger)  # lesson number (chronological)
+    # Number lessons by distinct concept (dense): a concept and all its tone
+    # renditions share one number — its 1-based first-appearance order. This
+    # matches the library's grouped rows and count line, so tone variants never
+    # leave a gap (e.g. #1, #3 under "Lesson 2"). For a library with no variants
+    # this equals the old ledger-position numbering, so existing lessons are
+    # unaffected.
+    seen = []
+    for r in ledger:
+        ck = r.get("concept_key")
+        if ck and ck not in seen:
+            seen.append(ck)
+    page_n = (seen.index(concept_key) + 1) if concept_key in seen else len(seen)
 
     shell = read_template(assets_dir, "lesson-shell.html")
     page = render_lesson_html(

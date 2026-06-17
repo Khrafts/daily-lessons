@@ -103,6 +103,21 @@ class VariantTests(unittest.TestCase):
         proc, _ = self._run(dict(BASE, mode="tutorial"), "--variant")
         self.assertEqual(proc.returncode, 2, proc.stderr)
 
+    def test_lesson_numbers_are_dense_by_concept(self):
+        # Ledger order [A-primary, A-variant, B-primary]: a tone variant sits
+        # between the two concepts. Numbering must stay dense (A=#1, B=#2) and
+        # the count line must agree — no "#1, #3 under Lesson 2" gap.
+        self._run(dict(BASE, mode="grounded"))                       # A primary
+        self._run(dict(BASE, mode="tutorial"), "--variant")          # A tutorial
+        _, b = self._run(dict(BASE, slug="other", concept_key="evm-other",
+                              title="Concept B", mode="grounded"))    # B primary
+        self.assertEqual(b["lesson_number"], 2)                      # 2nd concept, not #3
+        index = (self.dir / "index.html").read_text(encoding="utf-8")
+        self.assertIn("Lesson 2 of an ever-growing pile", index)
+        self.assertIn('<span class="num">#1</span>', index)
+        self.assertIn('<span class="num">#2</span>', index)
+        self.assertNotIn('<span class="num">#3</span>', index)
+
     def test_library_groups_renditions_into_one_row(self):
         # Two distinct concepts, plus one variant of the first.
         self._run(dict(BASE, mode="grounded"))
