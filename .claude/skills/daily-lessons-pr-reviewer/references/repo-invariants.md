@@ -57,7 +57,7 @@ Current token inventory (keep this in sync if you review a change that touches i
 
 - `lesson-shell.html`: `{{N}}` `{{TAUGHT_DATE}}` `{{SOURCE_DAY}}` `{{TITLE}}` `{{TAGS}}` `{{DEK}}` `{{BODY}}`
 - `library-shell.html`: `{{COUNT_LINE}}` `{{ROWS}}`
-- `library-row.html`: `{{FILE}}` `{{N}}` `{{TAUGHT_DATE}}` `{{SOURCE_DAY}}` `{{TITLE}}` `{{ONE_LINER}}` `{{TAGS}}`
+- `library-row.html`: `{{FILE}}` `{{N}}` `{{TAUGHT_DATE}}` `{{SOURCE_DAY}}` `{{TITLE}}` `{{ONE_LINER}}` `{{TAGS}}` `{{TONES}}`
 
 Failure modes to flag:
 - A new `{{FOO}}` added to a shell but never `.replace()`d → the literal text

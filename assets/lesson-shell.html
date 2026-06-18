@@ -921,5 +921,140 @@
 })();
 </script>
 <!-- /daily-lesson-chat:v1 -->
+
+<!-- daily-lesson-modes:v1 -->
+<style>
+  /* ---- tone switcher / generate bar (self-contained; live-server only) ---- */
+  #dlm-bar{
+    display:flex;flex-wrap:wrap;align-items:center;gap:.45rem .7rem;
+    margin:0 0 2.4rem;
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;
+  }
+  #dlm-bar[hidden]{display:none}
+  .dlm-label{color:var(--muted,#6b6b6b)}
+  .dlm-tones{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem}
+  .dlm-tone{
+    display:inline-flex;align-items:center;gap:.3rem;
+    border:1px solid var(--line,#e6e6e6);border-radius:999px;padding:.2rem .65rem;
+    color:var(--ink,#111);text-decoration:none;cursor:pointer;background:var(--paper,#fff);
+    font:inherit;letter-spacing:inherit;text-transform:inherit;
+    transition:background .14s ease,color .14s ease,border-color .14s ease;
+  }
+  .dlm-tone:hover{border-color:var(--ink,#111)}
+  .dlm-tone:focus-visible{outline:2px solid var(--ink,#111);outline-offset:2px}
+  .dlm-tone.is-current{background:var(--ink,#111);color:var(--paper,#fff);border-color:var(--ink,#111);cursor:default}
+  .dlm-tone.dlm-gen{border-style:dashed;color:var(--muted,#6b6b6b)}
+  .dlm-tone.dlm-gen:hover{color:var(--ink,#111);border-color:var(--ink,#111)}
+  .dlm-plus{font-weight:700}
+  .dlm-tones.dlm-busy .dlm-tone{pointer-events:none;opacity:.45}
+  .dlm-status{
+    color:var(--muted,#6b6b6b);text-transform:none;letter-spacing:0;
+    font-family:Fraunces,"Iowan Old Style",Georgia,serif;font-style:italic;font-size:.82rem;
+  }
+  .dlm-status.dlm-err{color:var(--ink,#111);font-style:normal}
+  .dlm-spin{display:inline-block;width:.72em;height:.72em;border:1.5px solid var(--line,#e6e6e6);border-top-color:var(--ink,#111);border-radius:50%;animation:dlm-rot .7s linear infinite;vertical-align:-.06em;margin-right:.4em}
+  @keyframes dlm-rot{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.dlm-spin{animation:none}}
+  @media print{#dlm-bar{display:none !important}}
+</style>
+
+<div id="dlm-bar" data-testid="modes-bar" aria-label="Lesson tone" hidden>
+  <span class="dlm-label">Tone</span>
+  <span class="dlm-tones" data-testid="modes-tones"></span>
+  <span class="dlm-status" data-testid="modes-status" role="status" aria-live="polite"></span>
+</div>
+
+<script>
+(function(){
+  var bar=document.getElementById('dlm-bar');
+  if(!bar) return;
+  var tones=bar.querySelector('.dlm-tones');
+  var statusEl=bar.querySelector('.dlm-status');
+  if(!tones||!statusEl) return;
+
+  // Switching tones is navigation; generating calls the local server. Both need
+  // a same-origin live server — on file:// there's nothing to talk to, so the
+  // bar simply never appears (chat's bridge/offline handling is separate).
+  if(!(location.protocol==='http:'||location.protocol==='https:')) return;
+
+  var file=location.pathname.split('/').pop()||'';
+  var lesson='lessons/'+file;
+  var busy=false;
+
+  function placeBar(){
+    // Sit the bar under the dek; fall back to the top of the article wrapper.
+    var dek=document.querySelector('.dek');
+    if(dek&&dek.parentNode){ dek.parentNode.insertBefore(bar,dek.nextSibling); return; }
+    var wrap=document.querySelector('.wrap');
+    if(wrap){ wrap.insertBefore(bar,wrap.firstChild); }
+  }
+  function setStatus(msg,err){
+    statusEl.className='dlm-status'+(err?' dlm-err':'');
+    statusEl.textContent=msg||'';
+  }
+  function setGenerating(msg){
+    statusEl.className='dlm-status';
+    statusEl.textContent='';
+    var spin=document.createElement('span'); spin.className='dlm-spin';
+    statusEl.appendChild(spin);
+    statusEl.appendChild(document.createTextNode(msg));
+  }
+  function chip(r){
+    var el;
+    if(r.current){ el=document.createElement('span'); el.className='dlm-tone is-current'; el.setAttribute('aria-current','true'); }
+    else { el=document.createElement('a'); el.className='dlm-tone'; el.href=r.url; el.title='Switch to the '+r.label+' version'; }
+    el.setAttribute('data-testid','modes-tone');
+    el.setAttribute('data-mode',r.mode||'original');
+    el.textContent=r.label;                 // escape-first via textContent
+    return el;
+  }
+  function genBtn(a){
+    var b=document.createElement('button');
+    b.type='button'; b.className='dlm-tone dlm-gen';
+    b.setAttribute('data-testid','modes-generate');
+    b.setAttribute('data-mode',a.mode);
+    b.title='Generate this lesson in '+a.label+' mode (runs your local claude)';
+    var plus=document.createElement('span'); plus.className='dlm-plus'; plus.textContent='+';
+    b.appendChild(plus); b.appendChild(document.createTextNode(' '+a.label));
+    b.addEventListener('click',function(){ generate(a); });
+    return b;
+  }
+  function render(data){
+    while(tones.firstChild) tones.removeChild(tones.firstChild);
+    var rends=(data&&data.renditions)||[], avail=(data&&data.available)||[];
+    rends.forEach(function(r){ tones.appendChild(chip(r)); });
+    avail.forEach(function(a){ tones.appendChild(genBtn(a)); });
+    bar.hidden = !(rends.length || avail.length);
+  }
+  function generate(a){
+    if(busy) return; busy=true;
+    tones.classList.add('dlm-busy');
+    setGenerating('Generating the '+a.label+' version with your local claude — this can take a minute…');
+    fetch('/api/recast',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lesson:lesson,mode:a.mode})
+    }).then(function(res){
+      return res.json().then(function(j){return {ok:res.ok,j:j};},function(){return {ok:false,j:null};});
+    }).then(function(r){
+      if(r.ok&&r.j&&r.j.ok&&r.j.url){
+        busy=false; tones.classList.remove('dlm-busy');
+        setStatus('Opening the '+a.label+' version…'); location.href=r.j.url; return;
+      }
+      throw new Error((r.j&&r.j.error)||'Generation failed');
+    }).catch(function(e){
+      busy=false; tones.classList.remove('dlm-busy');
+      setStatus((e&&e.message)||'Could not generate that tone',true);
+    });
+  }
+
+  placeBar();
+  fetch('/api/renditions?lesson='+encodeURIComponent(lesson))
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(j){ if(j&&j.ok) render(j); })
+    .catch(function(){ /* offline / not served by the lesson server: stay hidden */ });
+})();
+</script>
+<!-- /daily-lesson-modes:v1 -->
 </body>
 </html>

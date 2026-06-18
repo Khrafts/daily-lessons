@@ -32,7 +32,8 @@ renders identical styling and interactions — only your words differ.
   "source_day": "YYYY-MM-DD",
   "taught_at": "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ",
   "tags": ["two", "to", "five", "tags"],
-  "word_count": 0
+  "word_count": 0,
+  "mode": "grounded"
 }
 ```
 
@@ -40,6 +41,7 @@ renders identical styling and interactions — only your words differ.
 - `dek` is **raw inline HTML** — small inline elements (`<code>`, `<em>`, `<strong>`) only, no block elements.
 - `concept_key` is the dedup key; the renderer refuses (exit 3) if it already exists in the ledger. Verify against `index.json` first.
 - `word_count` is optional — omit it and the renderer counts the body for you.
+- `mode` is optional lecture-mode provenance (`grounded` / `tutorial` / `deep` / `briefing`); omit it for a mode-agnostic lesson. The renderer records it but never requires it. See `references/lesson-modes.md`.
 
 ---
 
@@ -120,7 +122,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render_lesson.py" \
 # default --lessons-dir is ~/.claude/daily-lessons
 ```
 
-Stdout is JSON: `{ok, title, lesson_number, file, path, word_count}`. Use `path`
+Stdout is JSON: `{ok, title, lesson_number, file, path, word_count, mode, variant_of}` (`mode` / `variant_of` are null for non-variant lessons). Use `path`
 to tell the user how to open it. Exit codes: `0` ok · `2` bad input · `3`
 duplicate `concept_key` · `4` missing template assets.
 

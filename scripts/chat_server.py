@@ -35,20 +35,33 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
 import webbrowser
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
+
+# render_lesson is a sibling module: the canonical renderer plus the mode
+# metadata (MODE_LABELS, mode_label, group_by_concept, load_ledger). Importing
+# it is side-effect-free (its main() is guarded), and it lets the modes/recast
+# features reuse one source of truth instead of duplicating the mode table.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+import render_lesson  # noqa: E402
 
 APP_NAME = "daily-lesson-chat"
 API_VERSION = 1
 DEFAULT_PORT = 8787
 LESSON_TEXT_CAP = 30000
 CLAUDE_TURN_TIMEOUT = 300  # seconds; hard kill for a single turn
+RECAST_TIMEOUT = 300       # seconds; hard kill for a single recast generation
+ARTICLE_HTML_CAP = 60000   # cap on the source article HTML fed to a recast
 
 # DNS-rebinding pin: the Host header must name this machine (any port).
 ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
@@ -56,6 +69,11 @@ ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 WIDGET_START = "<!-- daily-lesson-chat:v1 -->"
 WIDGET_END = "<!-- /daily-lesson-chat:v1 -->"
 WIDGET_MARKER = "daily-lesson-chat:v1"
+
+# The tone-switcher / generate block is a second shell-owned widget, injected
+# the same way as the chat block (and into legacy pages at serve time).
+MODES_START = "<!-- daily-lesson-modes:v1 -->"
+MODES_END = "<!-- /daily-lesson-modes:v1 -->"
 
 TUTOR_PROMPT = (
     "You are the Daily Lesson tutor, a chat panel beside a lesson the user is "
@@ -145,46 +163,51 @@ def build_system_prompt(lesson_title, lesson_text):
 
 # ---------- widget injection --------------------------------------------------
 
-def load_widget_block(assets_dir):
+def load_widget_block(assets_dir, start=WIDGET_START, end=WIDGET_END):
+    """The marker-delimited block (inclusive) from the shell, or None if absent.
+
+    Defaults to the chat widget; pass MODES_START/MODES_END for the tone block."""
     shell = assets_dir / "lesson-shell.html"
     try:
         src = shell.read_text(encoding="utf-8")
     except OSError:
-        warn("%s not found; serving lesson pages without the chat widget" % shell)
+        warn("%s not found; serving lesson pages without injected widgets" % shell)
         return None
-    start = src.find(WIDGET_START)
-    end = src.find(WIDGET_END)
-    if start == -1 or end == -1 or end < start:
-        warn("chat widget markers missing in %s; serving lesson pages unmodified" % shell)
+    s = src.find(start)
+    e = src.find(end)
+    if s == -1 or e == -1 or e < s:
+        warn("markers %s missing in %s; that block is not injected" % (start, shell))
         return None
-    return src[start:end + len(WIDGET_END)]
+    return src[s:e + len(end)]
 
 
-def inject_widget(raw, widget_block):
-    """Ensure a lesson page carries the CURRENT widget block (bytes -> bytes).
+def inject_widget(raw, widget_block, start=WIDGET_START, end=WIDGET_END):
+    """Ensure a lesson page carries the CURRENT marker-delimited block (bytes ->
+    bytes).
 
     A page with no block gets it inserted before </body>; a page with an older
     baked block has it replaced (so a served lesson always runs the current
-    widget, even one rendered before the latest version); a page already
-    carrying the identical block is returned byte-identical."""
+    block, even one rendered before the latest version); a page already
+    carrying the identical block is returned byte-identical. Safe to call once
+    per block (chat, then modes)."""
     if not widget_block:
         return raw
     try:
         page = raw.decode("utf-8")
     except UnicodeDecodeError:
         return raw
-    start = page.find(WIDGET_START)
-    end = page.find(WIDGET_END)
-    if start != -1:
+    s = page.find(start)
+    e = page.find(end)
+    if s != -1:
         # a block is already present; replace it (no-op if identical). On a
         # garbled block (END missing or before START) bail rather than insert a
         # second one.
-        if end == -1 or end < start:
+        if e == -1 or e < s:
             return raw
-        end += len(WIDGET_END)
-        if page[start:end] == widget_block:
+        e += len(end)
+        if page[s:e] == widget_block:
             return raw                       # already current → byte-identical
-        return (page[:start] + widget_block + page[end:]).encode("utf-8")
+        return (page[:s] + widget_block + page[e:]).encode("utf-8")
     idx = page.rfind("</body>")
     if idx == -1:
         return raw
@@ -665,11 +688,395 @@ def make_claude_backend(claude_bin, lessons_dir):
     return run_turn
 
 
+# ---------- recast (generate an alternate-tone rendition) ---------------------
+
+def _read_ledger(lessons_dir):
+    """Tolerant ledger read for the server: never raises, never exits (unlike
+    render_lesson.load_ledger, which calls sys.exit on bad JSON)."""
+    p = Path(lessons_dir) / "index.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def rendition_group(lessons_dir, lesson):
+    """The concept group containing `lesson` (a ledger 'file' value), or None.
+
+    Returns {"primary": <first rendition record>, "renditions": [records…]}."""
+    ledger = _read_ledger(lessons_dir)
+    rec = next((r for r in ledger if r.get("file") == lesson), None)
+    if rec is None:
+        return None
+    ck = rec.get("concept_key")
+    rends = [r for r in ledger if r.get("concept_key") == ck] if ck else [rec]
+    return {"primary": rends[0] if rends else rec, "renditions": rends}
+
+
+def extract_article_html(src):
+    """Inner article HTML (sections + self-check) of a rendered lesson page, for
+    feeding a recast. Falls back to plain text if the canonical boundaries are
+    missing."""
+    try:
+        dek = src.index('<p class="dek">')
+        start = src.index("</p>", dek) + len("</p>")
+        end = src.index("<hr", start)
+        article = src[start:end].strip()
+        if article:
+            return article[:ARTICLE_HTML_CAP]
+    except ValueError:
+        pass
+    return extract_lesson_text(src)[:ARTICLE_HTML_CAP]
+
+
+RECAST_INSTRUCTIONS = (
+    "You re-render an existing Daily Lesson in a different LECTURE MODE — a "
+    "different tone and depth for the SAME concept and the SAME facts. This is a "
+    "re-voicing, not a new lesson: do not change the concept, invent session "
+    "events, or alter technical facts. Output ONLY a single JSON object (no prose, "
+    "no markdown fence) with exactly these string keys: "
+    '{"dek": "...", "one_liner": "...", "body_html": "..."}. '
+    "body_html is the inner HTML of the article: the six numbered sections "
+    '(<h2><span class="h2n">01</span> …> through 06) then the .checks self-check, '
+    "using ONLY the canonical components (<figure class=\"code\"> with escaped "
+    "code at column 0, <details class=\"pit\">, <blockquote>, .checks cards). No "
+    "<head>, CSS, <script>, <hr>, or footer. dek is the italic subtitle (small "
+    "inline HTML like <code> allowed); one_liner is plain text. Obey the target "
+    "mode's tone/depth/length and the two floors in the reference below: never "
+    "make the concept obscure, and use second person ('you') ONLY for what the "
+    "USER genuinely did or decided — narrate the agent's/tooling's work in the "
+    "third person. If the source lesson credits 'you' with something you cannot "
+    "confirm the user did, switch it to the impersonal/agent voice."
+)
+
+
+def build_recast_system_prompt(modes_doc, target_mode, concept):
+    return (
+        "%s\n\n=== TARGET MODE: %s ===\n"
+        "Lesson title: %s\nConcept key: %s\nSource day: %s\nTags: %s\n\n"
+        "=== references/lesson-modes.md (the mode contract) ===\n%s\n"
+        "=== END reference ===" % (
+            RECAST_INSTRUCTIONS, target_mode,
+            concept.get("title", ""), concept.get("concept_key", ""),
+            concept.get("source_day", ""), ", ".join(concept.get("tags") or []),
+            modes_doc))
+
+
+def mock_recast_generate(concept, target_mode, article_html):
+    """Deterministic stand-in for the claude backend (tests + offline demos)."""
+    label = render_lesson.mode_label(target_mode)
+    title = concept.get("title", "this concept")
+    body = (
+        '<h2><span class="h2n">01</span> What it is</h2>'
+        '<p class="lead">A %s rendition of %s.</p>'
+        '<h2><span class="h2n">02</span> Why it mattered today</h2>'
+        '<p>In the session the agent did the work; this rendition reports it '
+        'honestly.</p>'
+        '<h2><span class="h2n">03</span> The mental model</h2><p>The picture.</p>'
+        '<h2><span class="h2n">04</span> A worked example</h2>'
+        '<figure class="code"><figcaption><span>example.py</span>'
+        '<button class="copy" type="button">Copy</button></figcaption>'
+        '<pre><code class="language-python">x = 1</code></pre></figure>'
+        '<h2><span class="h2n">05</span> Pitfalls</h2>'
+        '<details class="pit"><summary><span class="chev">&rsaquo;</span>'
+        '<span class="pl">01</span><span>A trap</span></summary>'
+        '<div class="body">Watch for it.</div></details>'
+        '<h2><span class="h2n">06</span> Go deeper</h2><p>Read more.</p>'
+        '<h3>Self-check</h3>'
+        '<div class="checks"><div class="card"><div class="q">'
+        '<span class="qn">Q1</span><span>Which tone is this?</span></div>'
+        '<div class="a">%s.</div><div class="reveal">&#9656; reveal</div>'
+        '</div></div>' % (label, html.escape(title), label))
+    return {"dek": "A <em>%s</em> rendition." % label,
+            "one_liner": "%s — in %s mode." % (title, label),
+            "body_html": body}
+
+
+def _extract_json(text):
+    """Parse a JSON object out of a model reply (tolerant of fences/prose)."""
+    t = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", t, re.DOTALL)
+    if fence:
+        t = fence.group(1).strip()
+    try:
+        return json.loads(t)
+    except ValueError:
+        pass
+    s, e = t.find("{"), t.rfind("}")
+    if s != -1 and e > s:
+        try:
+            return json.loads(t[s:e + 1])
+        except ValueError:
+            pass
+    raise ChatBackendError("could not parse the generated lesson as JSON")
+
+
+def _claude_recast_generate(claude_bin, tool_root, system_prompt, message):
+    # Pure text generation: grant NO tools at all. `--tools ""` disables the
+    # entire built-in tool set (`--allowedTools` is additive with the user's
+    # settings and can't restrict below them; only `--tools`/`--disallowedTools`
+    # actually remove a tool), and `--strict-mcp-config` (with no --mcp-config)
+    # blocks MCP tools — so injected lesson content fed as the message can never
+    # reach Bash/Write/Workflow/etc. or escalate via a spawned sub-agent.
+    argv = [claude_bin, "-p",
+            "--output-format", "stream-json", "--verbose",
+            "--append-system-prompt", system_prompt,
+            "--tools", "",
+            "--strict-mcp-config",
+            "--settings", '{"disableAllHooks": true}']
+    env = dict(os.environ)
+    for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
+        env.pop(key, None)
+    try:
+        proc = subprocess.Popen(argv, cwd=str(tool_root), env=env,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace",
+                                start_new_session=True)
+    except FileNotFoundError:
+        raise ChatBackendError(
+            "claude CLI not found — is Claude Code installed and on PATH?")
+    try:
+        proc.stdin.write(message)
+        proc.stdin.close()
+    except OSError:
+        pass
+    stderr_buf = []
+    drain = threading.Thread(target=_drain, args=(proc.stderr, stderr_buf), daemon=True)
+    drain.start()
+    timed_out = []
+    killer = threading.Timer(RECAST_TIMEOUT,
+                             lambda: (timed_out.append(True), _kill_quietly(proc)))
+    killer.start()
+    done = None
+    error = None
+    try:
+        try:
+            for kind, payload in parse_stream_json_lines(proc.stdout):
+                if kind == "done":
+                    done = payload
+        except ChatBackendError as err:
+            error = err
+            _kill_quietly(proc)
+        proc.wait()
+    finally:
+        killer.cancel()
+    drain.join(timeout=5)
+    tail = "".join(stderr_buf)[-500:].strip()
+    if timed_out:
+        raise ChatBackendError("claude timed out after %ds" % RECAST_TIMEOUT)
+    if error is not None:
+        raise ChatBackendError("%s%s" % (error, ": " + tail if tail else ""))
+    if proc.returncode != 0:
+        raise ChatBackendError("claude exited %s%s"
+                               % (proc.returncode, ": " + tail if tail else ""))
+    if done is None or not done.get("text"):
+        raise ChatBackendError("claude produced no output%s"
+                               % (": " + tail if tail else ""))
+    return done["text"]
+
+
+def make_recast(backend, claude_bin, lessons_dir, references_dir):
+    """Return recast_generate(concept, target_mode, article_html) -> dict with
+    keys dek/one_liner/body_html. Raises ChatBackendError on failure."""
+    tool_root = Path(lessons_dir) / "lessons"
+
+    if backend == "mock":
+        def recast_generate(concept, target_mode, article_html):
+            return mock_recast_generate(concept, target_mode, article_html)
+        return recast_generate
+
+    def recast_generate(concept, target_mode, article_html):
+        try:
+            modes_doc = (references_dir / "lesson-modes.md").read_text(encoding="utf-8")
+        except OSError:
+            modes_doc = "(mode reference unavailable; follow the target mode name.)"
+        prompt = build_recast_system_prompt(modes_doc, target_mode, concept)
+        text = _claude_recast_generate(claude_bin, tool_root, prompt, article_html)
+        data = _extract_json(text)
+        if not isinstance(data, dict) or not isinstance(data.get("body_html"), str):
+            raise ChatBackendError("the generated lesson had no usable body")
+        return data
+    return recast_generate
+
+
+# --- Allowlist sanitizer for model-generated lesson HTML ---------------------
+# A recast reply is HTML we bake straight into a locally-served page via the raw
+# {{BODY}}/{{DEK}} substitution. The recast subprocess has no tools, but its
+# *text* is not a trust boundary: a prompt-injected source lesson could steer it
+# to emit a script, an event handler, or a javascript: URL, and that would run
+# against the loopback origin. A denylist/regex scrub cannot model HTML
+# tokenization (browsers accept '/' as an attribute separator, decode entity-
+# encoded schemes, strip tab/newline from URLs, …), so instead we RE-PARSE the
+# HTML and RE-SERIALIZE only an allowlist of elements and attributes. Re-quoting
+# every kept attribute is the lynchpin: the browser then re-parses our output
+# unambiguously, so no tokenizer differential can reconstitute a handler.
+
+# Inline + block elements that legitimately appear in a lesson body/dek. Anything
+# not here is dropped (its text children are kept, except for _DROP_CONTENT).
+_ALLOWED_TAGS = frozenset((
+    "h2", "h3", "h4", "p", "span", "div", "a", "br",
+    "em", "strong", "b", "i", "u", "s", "code", "pre", "kbd", "samp", "var",
+    "mark", "small", "sub", "sup", "abbr", "cite", "q", "blockquote",
+    "ul", "ol", "li", "dl", "dt", "dd",
+    "figure", "figcaption", "details", "summary", "button",
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
+))
+# Elements whose CONTENT must also be dropped, not just the tag (they carry
+# script, CSS, or parser/namespace-confusion payloads).
+_DROP_CONTENT_TAGS = frozenset((
+    "script", "style", "title", "head", "noscript", "template",
+    "svg", "math", "iframe", "object", "embed", "frame", "frameset", "applet",
+))
+_VOID_TAGS = frozenset(("br",))
+_GLOBAL_ATTRS = frozenset(("class",))
+_TAG_ATTRS = {
+    "a": frozenset(("href", "title")),
+    "code": frozenset(("class",)),
+    "button": frozenset(("type",)),
+    "ol": frozenset(("start", "type")),
+    "td": frozenset(("colspan", "rowspan")),
+    "th": frozenset(("colspan", "rowspan", "scope")),
+}
+_URL_ATTRS = frozenset(("href", "src"))
+_SAFE_URL_SCHEMES = frozenset(("http", "https", "mailto"))
+_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):")
+
+
+def _safe_url(value):
+    """Return value if it is a relative URL or a safe-scheme absolute URL, else
+    None. The browser decodes entities and strips ASCII whitespace/control chars
+    before reading the scheme, so we mirror that before checking."""
+    if value is None:
+        return None
+    probe = re.sub(r"[\x00-\x20]+", "", value)      # browsers drop these in URLs
+    m = _SCHEME_RE.match(probe)
+    if m:                                            # has an explicit scheme
+        return value if m.group(1).lower() in _SAFE_URL_SCHEMES else None
+    return value                                     # relative / anchor / query
+
+
+class _LessonSanitizer(HTMLParser):
+    """Re-serialize HTML keeping only allowlisted tags/attributes. Drops every
+    on*= handler and any tag/attribute outside the allowlist; validates URL
+    attributes; escapes all text and attribute values."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+        self._drop_depth = 0          # >0 while inside a drop-content element
+
+    def _emit_start(self, tag, attrs, self_closing):
+        if self._drop_depth or tag not in _ALLOWED_TAGS:
+            return
+        allowed = _GLOBAL_ATTRS | _TAG_ATTRS.get(tag, frozenset())
+        kept = []
+        for name, value in attrs:
+            ln = name.lower()
+            if ln.startswith("on") or ln not in allowed:
+                continue              # never any event handler / non-allowlisted attr
+            if value is None:
+                kept.append(ln)       # boolean attribute
+                continue
+            if ln in _URL_ATTRS:
+                value = _safe_url(value)
+                if value is None:
+                    continue
+            kept.append('%s="%s"' % (ln, html.escape(value, quote=True)))
+        body = tag + ("".join(" " + k for k in kept))
+        self.out.append("<%s%s>" % (body, "/" if (self_closing or tag in _VOID_TAGS) else ""))
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_CONTENT_TAGS:
+            self._drop_depth += 1
+            return
+        self._emit_start(tag, attrs, self_closing=False)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in _DROP_CONTENT_TAGS:
+            return                    # self-closing drop-content: nothing, no depth
+        self._emit_start(tag, attrs, self_closing=True)
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_CONTENT_TAGS:
+            if self._drop_depth:
+                self._drop_depth -= 1
+            return
+        if self._drop_depth or tag not in _ALLOWED_TAGS or tag in _VOID_TAGS:
+            return
+        self.out.append("</%s>" % tag)
+
+    def handle_data(self, data):
+        if self._drop_depth:
+            return
+        self.out.append(html.escape(data, quote=False))
+
+
+def strip_unsafe_html(s):
+    """Sanitize model-generated lesson HTML before it is written to a served
+    page: re-parse and re-serialize keeping only the allowlisted lesson markup,
+    dropping scripts/styles/handlers and unsafe URLs. See _LessonSanitizer."""
+    if not s:
+        return s
+    p = _LessonSanitizer()
+    p.feed(s)
+    p.close()
+    return "".join(p.out)
+
+
+class RecastRenderError(Exception):
+    """render_lesson.py --variant failed; str(err) is safe to surface."""
+
+
+def render_variant(render_script, lessons_dir, assets_dir, concept, mode, gen):
+    """Write meta+body for an alternate-tone rendition and run the canonical
+    renderer with --variant. Returns its JSON summary. Raises RecastRenderError."""
+    # The dek is raw inline HTML ({{DEK}}) and the body is raw HTML ({{BODY}});
+    # both come from the model, so scrub them before they reach a served page.
+    dek = strip_unsafe_html(
+        (gen.get("dek") or concept.get("title") or "").strip() or concept.get("title"))
+    body_html = strip_unsafe_html(gen.get("body_html") or "")
+    meta = {
+        "slug": concept.get("slug"),
+        "concept_key": concept.get("concept_key"),
+        "title": concept.get("title"),
+        "dek": dek,
+        "one_liner": (gen.get("one_liner") or concept.get("one_liner") or "").strip()
+                     or concept.get("one_liner"),
+        "source_day": concept.get("source_day"),
+        "taught_at": now_iso(),
+        "tags": concept.get("tags") or [],
+        "mode": mode,
+    }
+    with tempfile.TemporaryDirectory() as td:
+        mp = Path(td) / "meta.json"
+        bp = Path(td) / "body.html"
+        mp.write_text(json.dumps(meta), encoding="utf-8")
+        bp.write_text(body_html, encoding="utf-8")
+        argv = [sys.executable, str(render_script), "--variant",
+                "--meta", str(mp), "--body", str(bp),
+                "--lessons-dir", str(lessons_dir), "--assets-dir", str(assets_dir)]
+        proc = subprocess.run(argv, capture_output=True, text=True)
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "").strip() or ("renderer exited %d" % proc.returncode)
+        raise RecastRenderError(msg[:300])
+    try:
+        return json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise RecastRenderError("renderer produced no JSON summary")
+
+
 # ---------- http --------------------------------------------------------------
 
 def _turn_lock(server, lesson):
     with server.turn_locks_guard:
         return server.turn_locks.setdefault(lesson, threading.Lock())
+
+
+def _recast_lock(server, key):
+    with server.recast_locks_guard:
+        return server.recast_locks.setdefault(key, threading.Lock())
 
 
 class ChatHandler(BaseHTTPRequestHandler):
@@ -793,6 +1200,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self._send_json(403, {"ok": False, "error": "cross-origin"})
             elif parts.path == "/api/chat":
                 self._handle_chat_get(parts.query)
+            elif parts.path == "/api/renditions":
+                self._handle_renditions_get(parts.query)
             else:
                 self._send_json(404, {"ok": False, "error": "not found"})
         else:
@@ -815,6 +1224,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             self._handle_delete()
         elif path == "/api/chat/reset":
             self._handle_reset()
+        elif path == "/api/recast":
+            self._handle_recast()
         else:
             self.close_connection = True  # request body may be unconsumed
             self._send_json(404, {"ok": False, "error": "not found"})
@@ -986,6 +1397,109 @@ class ChatHandler(BaseHTTPRequestHandler):
             lock.release()
         self._send_json(200, {"ok": True})
 
+    def _handle_renditions_get(self, query):
+        """The lesson's concept group: existing tones (to switch to) + the modes
+        not yet generated (to offer a Generate button)."""
+        params = parse_qs(query)
+        lesson = (params.get("lesson") or [None])[0]
+        if not lesson:
+            return self._send_json(400, {"ok": False, "error": "bad request"})
+        if self._lesson_path(lesson) is None:
+            return self._send_json(404, {"ok": False, "error": "unknown lesson"})
+        order = list(render_lesson.MODE_LABELS.keys())
+        group = rendition_group(self.server.lessons_dir, lesson)
+        if group is None:
+            # served page isn't in the ledger: nothing to switch or generate
+            return self._send_json(200, {"ok": True, "lesson": lesson,
+                                         "concept_key": None, "current_mode": None,
+                                         "renditions": [], "available": []})
+        rends, present = [], set()
+        for r in group["renditions"]:
+            m = r.get("mode") or None
+            present.add(m)
+            f = r.get("file")
+            rends.append({"mode": m, "label": render_lesson.mode_label(m),
+                          "file": f, "url": "/" + str(f),
+                          "current": f == lesson})
+        available = [{"mode": m, "label": render_lesson.MODE_LABELS[m]}
+                     for m in order if m not in present]
+        current = next((x["mode"] for x in rends if x["current"]), None)
+        self._send_json(200, {"ok": True, "lesson": lesson,
+                              "concept_key": group["primary"].get("concept_key"),
+                              "current_mode": current,
+                              "renditions": rends, "available": available})
+
+    def _handle_recast(self):
+        """Generate an alternate-tone rendition of this lesson's concept and
+        return its URL. Idempotent: a tone that already exists is returned as-is
+        — re-checked INSIDE the per-concept lock, so two concurrent requests for
+        the same tone can't both slip past a stale check into a doomed second
+        render."""
+        parsed, handled = self._post_lesson()
+        if handled:
+            return
+        body, lesson = parsed
+        mode = body.get("mode")
+        if mode not in render_lesson.MODE_LABELS:
+            return self._send_json(400, {"ok": False, "error": "unknown mode"})
+
+        def existing_in(grp):
+            return next((r for r in grp["renditions"]
+                         if (r.get("mode") or None) == mode), None)
+
+        def already(rec):
+            f = rec.get("file")
+            return self._send_json(200, {"ok": True, "already": True, "mode": mode,
+                                         "label": render_lesson.mode_label(mode),
+                                         "file": f, "url": "/" + str(f)})
+
+        group = rendition_group(self.server.lessons_dir, lesson)
+        if group is None:
+            return self._send_json(404, {"ok": False, "error": "lesson not in the library ledger"})
+        hit = existing_in(group)  # fast path: tone already present (no lock needed)
+        if hit:
+            return already(hit)
+        lock = _recast_lock(self.server, group["primary"].get("concept_key") or lesson)
+        if not lock.acquire(False):  # a recast of this concept is already running
+            return self._send_json(409, {"ok": False, "error": "busy"})
+        try:
+            # Re-read + re-check under the lock: a concurrent recast of this same
+            # tone may have completed between the fast-path check and here.
+            group = rendition_group(self.server.lessons_dir, lesson)
+            if group is None:
+                return self._send_json(404, {"ok": False, "error": "lesson not in the library ledger"})
+            concept = group["primary"]
+            hit = existing_in(group)
+            if hit:
+                return already(hit)
+            primary_path = self._lesson_path(concept.get("file"))
+            if primary_path is None:
+                return self._send_json(404, {"ok": False, "error": "primary rendition missing"})
+            article = extract_article_html(
+                primary_path.read_text(encoding="utf-8", errors="replace"))
+            try:
+                gen = self.server.recast(concept, mode, article)
+            except ChatBackendError as err:
+                return self._send_json(502, {"ok": False, "error": str(err)})
+            if not isinstance(gen, dict) or "<h2" not in (gen.get("body_html") or ""):
+                return self._send_json(502, {"ok": False,
+                                             "error": "generation returned no usable lesson body"})
+            try:
+                # one global lock around the ledger-mutating render step so two
+                # concurrent recasts (different concepts) can't clobber index.json
+                with self.server.render_lock:
+                    result = render_variant(self.server.render_script,
+                                            self.server.lessons_dir,
+                                            self.server.assets_dir, concept, mode, gen)
+            except RecastRenderError as err:
+                return self._send_json(500, {"ok": False, "error": str(err)})
+            f = result.get("file")
+            self._send_json(200, {"ok": True, "already": False, "mode": mode,
+                                  "label": render_lesson.mode_label(mode),
+                                  "file": f, "url": "/" + str(f)})
+        finally:
+            lock.release()
+
     def _serve_static(self, path):
         if path in ("", "/", "/index.html"):
             rel = "index.html"
@@ -997,7 +1511,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._send_json(404, {"ok": False, "error": "not found"})
         raw = real.read_bytes()
         if rel.startswith("lessons/") and rel.endswith(".html"):
-            raw = inject_widget(raw, self.server.widget_block)
+            raw = inject_widget(raw, self.server.widget_block, WIDGET_START, WIDGET_END)
+            raw = inject_widget(raw, self.server.modes_block, MODES_START, MODES_END)
         self.send_response(200)
         self.send_header("Content-Type",
                          CONTENT_TYPES.get(real.suffix.lower(), "application/octet-stream"))
@@ -1012,6 +1527,7 @@ def build_server(port, lessons_dir, backend, claude_bin="claude", assets_dir=Non
     (lessons_dir / "lessons").mkdir(parents=True, exist_ok=True)  # the tutor's tool root
     if assets_dir is None:
         assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    assets_dir = Path(assets_dir).expanduser()
     if backend == "mock":
         run_turn = mock_run_turn
     else:
@@ -1026,9 +1542,17 @@ def build_server(port, lessons_dir, backend, claude_bin="claude", assets_dir=Non
     server.backend_name = backend
     server.run_turn = run_turn
     server.store = ChatStore(lessons_dir)
-    server.widget_block = load_widget_block(Path(assets_dir).expanduser())
+    server.assets_dir = assets_dir
+    server.references_dir = assets_dir.parent / "references"
+    server.render_script = _SCRIPTS_DIR / "render_lesson.py"
+    server.widget_block = load_widget_block(assets_dir, WIDGET_START, WIDGET_END)
+    server.modes_block = load_widget_block(assets_dir, MODES_START, MODES_END)
+    server.recast = make_recast(backend, claude_bin, lessons_dir, server.references_dir)
     server.turn_locks = {}
     server.turn_locks_guard = threading.Lock()
+    server.recast_locks = {}
+    server.recast_locks_guard = threading.Lock()
+    server.render_lock = threading.Lock()  # serialize ledger-mutating renders
     return server
 
 

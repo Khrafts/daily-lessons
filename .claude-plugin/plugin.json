@@ -1,7 +1,7 @@
 {
   "name": "daily-lesson",
-  "description": "Mines your recent Claude Code sessions and teaches you one concept you relied on but probably don't fully understand — rendered as a self-contained, interactive HTML lesson from a frozen canonical template, so every install looks identical — then lets you chat with any lesson through your local claude CLI. Lesson generation is fully local; chat answers come from your own claude CLI, the same network calls any Claude Code session makes.",
-  "version": "0.3.0",
+  "description": "Mines your recent Claude Code sessions and teaches you one concept you relied on but probably don't fully understand — rendered as a self-contained, interactive HTML lesson from a frozen canonical template, so every install looks identical, in your choice of lecture mode (tone + depth) that you can switch or generate right from the lesson page — then lets you chat with any lesson through your local claude CLI. Lesson generation is fully local; chat answers come from your own claude CLI, the same network calls any Claude Code session makes.",
+  "version": "0.4.0",
   "author": {
     "name": "khrafts",
     "email": "uwusebauyoyou@gmail.com",
