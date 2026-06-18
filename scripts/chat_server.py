@@ -41,6 +41,7 @@ import time
 import uuid
 import webbrowser
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -900,6 +901,130 @@ def make_recast(backend, claude_bin, lessons_dir, references_dir):
     return recast_generate
 
 
+# --- Allowlist sanitizer for model-generated lesson HTML ---------------------
+# A recast reply is HTML we bake straight into a locally-served page via the raw
+# {{BODY}}/{{DEK}} substitution. The recast subprocess has no tools, but its
+# *text* is not a trust boundary: a prompt-injected source lesson could steer it
+# to emit a script, an event handler, or a javascript: URL, and that would run
+# against the loopback origin. A denylist/regex scrub cannot model HTML
+# tokenization (browsers accept '/' as an attribute separator, decode entity-
+# encoded schemes, strip tab/newline from URLs, …), so instead we RE-PARSE the
+# HTML and RE-SERIALIZE only an allowlist of elements and attributes. Re-quoting
+# every kept attribute is the lynchpin: the browser then re-parses our output
+# unambiguously, so no tokenizer differential can reconstitute a handler.
+
+# Inline + block elements that legitimately appear in a lesson body/dek. Anything
+# not here is dropped (its text children are kept, except for _DROP_CONTENT).
+_ALLOWED_TAGS = frozenset((
+    "h2", "h3", "h4", "p", "span", "div", "a", "br",
+    "em", "strong", "b", "i", "u", "s", "code", "pre", "kbd", "samp", "var",
+    "mark", "small", "sub", "sup", "abbr", "cite", "q", "blockquote",
+    "ul", "ol", "li", "dl", "dt", "dd",
+    "figure", "figcaption", "details", "summary", "button",
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
+))
+# Elements whose CONTENT must also be dropped, not just the tag (they carry
+# script, CSS, or parser/namespace-confusion payloads).
+_DROP_CONTENT_TAGS = frozenset((
+    "script", "style", "title", "head", "noscript", "template",
+    "svg", "math", "iframe", "object", "embed", "frame", "frameset", "applet",
+))
+_VOID_TAGS = frozenset(("br",))
+_GLOBAL_ATTRS = frozenset(("class",))
+_TAG_ATTRS = {
+    "a": frozenset(("href", "title")),
+    "code": frozenset(("class",)),
+    "button": frozenset(("type",)),
+    "ol": frozenset(("start", "type")),
+    "td": frozenset(("colspan", "rowspan")),
+    "th": frozenset(("colspan", "rowspan", "scope")),
+}
+_URL_ATTRS = frozenset(("href", "src"))
+_SAFE_URL_SCHEMES = frozenset(("http", "https", "mailto"))
+_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):")
+
+
+def _safe_url(value):
+    """Return value if it is a relative URL or a safe-scheme absolute URL, else
+    None. The browser decodes entities and strips ASCII whitespace/control chars
+    before reading the scheme, so we mirror that before checking."""
+    if value is None:
+        return None
+    probe = re.sub(r"[\x00-\x20]+", "", value)      # browsers drop these in URLs
+    m = _SCHEME_RE.match(probe)
+    if m:                                            # has an explicit scheme
+        return value if m.group(1).lower() in _SAFE_URL_SCHEMES else None
+    return value                                     # relative / anchor / query
+
+
+class _LessonSanitizer(HTMLParser):
+    """Re-serialize HTML keeping only allowlisted tags/attributes. Drops every
+    on*= handler and any tag/attribute outside the allowlist; validates URL
+    attributes; escapes all text and attribute values."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+        self._drop_depth = 0          # >0 while inside a drop-content element
+
+    def _emit_start(self, tag, attrs, self_closing):
+        if self._drop_depth or tag not in _ALLOWED_TAGS:
+            return
+        allowed = _GLOBAL_ATTRS | _TAG_ATTRS.get(tag, frozenset())
+        kept = []
+        for name, value in attrs:
+            ln = name.lower()
+            if ln.startswith("on") or ln not in allowed:
+                continue              # never any event handler / non-allowlisted attr
+            if value is None:
+                kept.append(ln)       # boolean attribute
+                continue
+            if ln in _URL_ATTRS:
+                value = _safe_url(value)
+                if value is None:
+                    continue
+            kept.append('%s="%s"' % (ln, html.escape(value, quote=True)))
+        body = tag + ("".join(" " + k for k in kept))
+        self.out.append("<%s%s>" % (body, "/" if (self_closing or tag in _VOID_TAGS) else ""))
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_CONTENT_TAGS:
+            self._drop_depth += 1
+            return
+        self._emit_start(tag, attrs, self_closing=False)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in _DROP_CONTENT_TAGS:
+            return                    # self-closing drop-content: nothing, no depth
+        self._emit_start(tag, attrs, self_closing=True)
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_CONTENT_TAGS:
+            if self._drop_depth:
+                self._drop_depth -= 1
+            return
+        if self._drop_depth or tag not in _ALLOWED_TAGS or tag in _VOID_TAGS:
+            return
+        self.out.append("</%s>" % tag)
+
+    def handle_data(self, data):
+        if self._drop_depth:
+            return
+        self.out.append(html.escape(data, quote=False))
+
+
+def strip_unsafe_html(s):
+    """Sanitize model-generated lesson HTML before it is written to a served
+    page: re-parse and re-serialize keeping only the allowlisted lesson markup,
+    dropping scripts/styles/handlers and unsafe URLs. See _LessonSanitizer."""
+    if not s:
+        return s
+    p = _LessonSanitizer()
+    p.feed(s)
+    p.close()
+    return "".join(p.out)
+
+
 class RecastRenderError(Exception):
     """render_lesson.py --variant failed; str(err) is safe to surface."""
 
@@ -907,11 +1032,16 @@ class RecastRenderError(Exception):
 def render_variant(render_script, lessons_dir, assets_dir, concept, mode, gen):
     """Write meta+body for an alternate-tone rendition and run the canonical
     renderer with --variant. Returns its JSON summary. Raises RecastRenderError."""
+    # The dek is raw inline HTML ({{DEK}}) and the body is raw HTML ({{BODY}});
+    # both come from the model, so scrub them before they reach a served page.
+    dek = strip_unsafe_html(
+        (gen.get("dek") or concept.get("title") or "").strip() or concept.get("title"))
+    body_html = strip_unsafe_html(gen.get("body_html") or "")
     meta = {
         "slug": concept.get("slug"),
         "concept_key": concept.get("concept_key"),
         "title": concept.get("title"),
-        "dek": (gen.get("dek") or concept.get("title") or "").strip() or concept.get("title"),
+        "dek": dek,
         "one_liner": (gen.get("one_liner") or concept.get("one_liner") or "").strip()
                      or concept.get("one_liner"),
         "source_day": concept.get("source_day"),
@@ -923,7 +1053,7 @@ def render_variant(render_script, lessons_dir, assets_dir, concept, mode, gen):
         mp = Path(td) / "meta.json"
         bp = Path(td) / "body.html"
         mp.write_text(json.dumps(meta), encoding="utf-8")
-        bp.write_text(gen.get("body_html") or "", encoding="utf-8")
+        bp.write_text(body_html, encoding="utf-8")
         argv = [sys.executable, str(render_script), "--variant",
                 "--meta", str(mp), "--body", str(bp),
                 "--lessons-dir", str(lessons_dir), "--assets-dir", str(assets_dir)]

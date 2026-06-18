@@ -74,6 +74,13 @@ def esc(s):
     return html.escape(str(s), quote=False)
 
 
+def esc_attr(s):
+    """Escape for a double-quoted HTML attribute value (& < > and quotes).
+    Use this, not esc(), for anything interpolated inside `attr="..."` — a bare
+    `esc()` leaves `"` intact, which would break out of the attribute."""
+    return html.escape(str(s), quote=True)
+
+
 def read_template(assets_dir, name):
     p = assets_dir / name
     if not p.is_file():
@@ -110,7 +117,7 @@ def render_tones(renditions):
     if not renditions or len(renditions) < 2:
         return ""
     links = "".join(
-        f'<a class="tone" href="{esc(r["file"])}">{esc(mode_label(r.get("mode")))}</a>'
+        f'<a class="tone" href="{esc_attr(r["file"])}">{esc(mode_label(r.get("mode")))}</a>'
         for r in renditions
     )
     return f'      <div class="tones"><span class="tones-label">tones</span>{links}</div>'
@@ -120,7 +127,7 @@ def render_row(row_tpl, rec, n, renditions=None):
     tag_spans = "\n".join(f'        <span class="tag">{esc(t)}</span>'
                           for t in rec.get("tags", []))
     out = row_tpl.rstrip("\n")
-    out = out.replace("{{FILE}}", esc(rec["file"]))
+    out = out.replace("{{FILE}}", esc_attr(rec["file"]))   # href="..." context
     out = out.replace("{{N}}", str(n))
     out = out.replace("{{TAUGHT_DATE}}", esc(rec["taught_at"][:10]))
     out = out.replace("{{SOURCE_DAY}}", esc(rec["source_day"]))

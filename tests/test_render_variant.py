@@ -20,6 +20,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 RENDER = REPO / "scripts" / "render_lesson.py"
+ASSETS = REPO / "assets"
+sys.path.insert(0, str(REPO / "scripts"))
+import render_lesson  # noqa: E402
 
 BODY = '<h2><span class="h2n">01</span> What it is</h2><p>x</p>'
 
@@ -131,6 +134,28 @@ class VariantTests(unittest.TestCase):
         self.assertEqual(index.count('<li class="row">'), 2, index)
         # The variant is reachable from the library (its file is linked).
         self.assertIn(v_out["file"], index)
+
+
+class AttrEscapingTests(unittest.TestCase):
+    """`file` values land inside `href="..."`; a bare esc() (quote=False) would
+    leave a `"` intact and let it break out of the attribute. Paths don't carry
+    quotes today, but the escaping must be correct for the context regardless."""
+
+    def test_render_row_escapes_quote_in_file_href(self):
+        tpl = (ASSETS / "library-row.html").read_text(encoding="utf-8")
+        rec = {"file": 'lessons/a"onmouseover=alert(1)//b.html',
+               "taught_at": "2026-06-16T00:00:00+00:00", "source_day": "2026-06-15",
+               "title": "T", "one_liner": "o", "tags": []}
+        out = render_lesson.render_row(tpl, rec, 1)
+        self.assertNotIn('a"onmouseover', out)   # the raw quote never survives
+        self.assertIn("&quot;", out)
+
+    def test_render_tones_escapes_quote_in_href(self):
+        rends = [{"file": 'lessons/a"b.html', "mode": "grounded"},
+                 {"file": "lessons/c-tutorial.html", "mode": "tutorial"}]
+        out = render_lesson.render_tones(rends)
+        self.assertNotIn('href="lessons/a"b.html"', out)
+        self.assertIn("&quot;", out)
 
 
 if __name__ == "__main__":
