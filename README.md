@@ -149,8 +149,10 @@ reboot? Run:
 ```
 
 It serves your library at `http://127.0.0.1:8787` (loopback only — nothing is
-exposed to the network). The launcher is idempotent: it reuses a running server
-and only starts one if needed. Lessons opened directly via `file://` show the
+exposed to the network). The launcher is idempotent and version-aware: it reuses
+a running server when it matches the installed plugin version, and after a plugin
+update the next lesson you open automatically replaces any still-running older
+server — no manual restart needed. Lessons opened directly via `file://` show the
 button too — if the server is running, the button deep-links into the served
 page; if not, it tells you how to start it. Lessons rendered before this feature
 gain the chat button automatically when viewed through the server.
