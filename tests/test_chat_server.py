@@ -148,9 +148,15 @@ class HttpApiTests(unittest.TestCase):
     def test_health(self):
         status, headers, data = request(self.port, "GET", "/api/health")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(data),
-                         {"ok": True, "app": "daily-lesson-chat",
-                          "version": 1, "backend": "mock"})
+        body = json.loads(data)
+        self.assertEqual(body["ok"], True)
+        self.assertEqual(body["app"], "daily-lesson-chat")
+        self.assertEqual(body["version"], 1)
+        self.assertEqual(body["backend"], "mock")
+        self.assertIsInstance(body["plugin_version"], str)
+        self.assertTrue(body["plugin_version"])           # never empty
+        self.assertIsInstance(body["pid"], int)
+        self.assertGreater(body["pid"], 0)
         # no Origin (curl) and a file:// page (Origin: null) may read it
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "null")
         _, h_null, _ = request(self.port, "GET", "/api/health",
