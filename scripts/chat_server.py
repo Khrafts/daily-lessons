@@ -63,6 +63,25 @@ CLAUDE_TURN_TIMEOUT = 300  # seconds; hard kill for a single turn
 RECAST_TIMEOUT = 300       # seconds; hard kill for a single recast generation
 ARTICLE_HTML_CAP = 60000   # cap on the source article HTML fed to a recast
 
+
+def _read_manifest_version():
+    """Plugin semver from .claude-plugin/plugin.json at the plugin root (the
+    parent of this script's scripts/ dir). Returns 'unknown' if the manifest is
+    absent or unparseable so a dev checkout / odd layout still serves."""
+    try:
+        manifest = (Path(__file__).resolve().parent.parent
+                    / ".claude-plugin" / "plugin.json")
+        return json.loads(manifest.read_text("utf-8")).get("version") or "unknown"
+    except (OSError, ValueError):
+        return "unknown"
+
+
+# The plugin version this code belongs to. serve.sh compares it against the
+# running server's reported value to retire a stale instance left over from
+# before a plugin update. DAILY_LESSON_PLUGIN_VERSION is a test seam only — no
+# production caller sets it.
+PLUGIN_VERSION = os.environ.get("DAILY_LESSON_PLUGIN_VERSION") or _read_manifest_version()
+
 # DNS-rebinding pin: the Host header must name this machine (any port).
 ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 
@@ -1193,6 +1212,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         if parts.path == "/api/health":
             self._send_json(200, {"ok": True, "app": APP_NAME,
                                   "version": API_VERSION,
+                                  "plugin_version": PLUGIN_VERSION,
+                                  "pid": os.getpid(),
                                   "backend": self.server.backend_name},
                             cors_origin=self._health_acao())
         elif parts.path.startswith("/api/"):
@@ -1421,8 +1442,13 @@ class ChatHandler(BaseHTTPRequestHandler):
             rends.append({"mode": m, "label": render_lesson.mode_label(m),
                           "file": f, "url": "/" + str(f),
                           "current": f == lesson})
-        available = [{"mode": m, "label": render_lesson.MODE_LABELS[m]}
-                     for m in order if m not in present]
+        # A recast needs a concept_key (render_lesson --variant keys the new tone
+        # to it). A legacy/pre-modes record without one can still be switched
+        # between any tones it already has, but we don't OFFER new tones to
+        # generate — pressing one would fail at render time.
+        can_recast = bool(group["primary"].get("concept_key"))
+        available = ([{"mode": m, "label": render_lesson.MODE_LABELS[m]}
+                      for m in order if m not in present] if can_recast else [])
         current = next((x["mode"] for x in rends if x["current"]), None)
         self._send_json(200, {"ok": True, "lesson": lesson,
                               "concept_key": group["primary"].get("concept_key"),
@@ -1456,6 +1482,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         group = rendition_group(self.server.lessons_dir, lesson)
         if group is None:
             return self._send_json(404, {"ok": False, "error": "lesson not in the library ledger"})
+        if not group["primary"].get("concept_key"):
+            # legacy/pre-modes record: --variant has no concept to attach the new
+            # tone to, so a recast would die at render time. Reject up front.
+            return self._send_json(422, {"ok": False,
+                                         "error": "this lesson can't be recast (no concept key)"})
         hit = existing_in(group)  # fast path: tone already present (no lock needed)
         if hit:
             return already(hit)

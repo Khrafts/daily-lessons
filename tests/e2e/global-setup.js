@@ -1,7 +1,8 @@
 // Global setup: build a fresh fixture library in .tmp/lessons-home by running
 // the REAL renderer (scripts/render_lesson.py) twice, then derive a third,
-// "legacy" lesson page that has the daily-lesson-chat:v1 marker block removed
-// so the chat server's serve-time injection path gets exercised.
+// "legacy" lesson page that has BOTH the daily-lesson-chat:v1 and the
+// daily-lesson-modes:v1 marker blocks removed, so the chat server's serve-time
+// injection path is exercised for each.
 'use strict';
 
 const { execFileSync } = require('child_process');
@@ -29,9 +30,12 @@ const COMMON_META = {
 
 const LEGACY_FILE_REL = 'lessons/2026-06-09-legacy-gamma.html';
 
-// Matches the whole widget block, dotall, including both markers.
+// Matches the whole chat-widget block, dotall, including both markers.
 const WIDGET_BLOCK_RE =
   /<!--\s*daily-lesson-chat:v1\s*-->[\s\S]*?<!--\s*\/daily-lesson-chat:v1\s*-->\s*/g;
+// Matches the whole tone/modes block (tone bar + confirm modal), dotall.
+const MODES_BLOCK_RE =
+  /<!--\s*daily-lesson-modes:v1\s*-->[\s\S]*?<!--\s*\/daily-lesson-modes:v1\s*-->\s*/g;
 
 function renderLesson(meta) {
   const metaPath = path.join(FIXTURE_SRC, `${meta.slug}.meta.json`);
@@ -68,15 +72,22 @@ module.exports = async function globalSetup() {
     ...COMMON_META,
   });
 
-  // Legacy fixture: lesson A's page with the entire chat-widget marker block
-  // removed. If the widget has not landed in assets/lesson-shell.html yet the
-  // regex simply matches nothing and the copy is already legacy-shaped.
+  // Legacy fixture: lesson A's page with BOTH the chat-widget block and the
+  // tone/modes block removed, so the chat server's serve-time injection of each
+  // is genuinely exercised. If a block has not landed in lesson-shell.html yet
+  // the regex simply matches nothing and the copy is already legacy-shaped.
   const alphaHtml = fs.readFileSync(path.join(LESSONS_HOME, alpha.file), 'utf8');
-  const legacyHtml = alphaHtml.replace(WIDGET_BLOCK_RE, '');
+  const legacyHtml = alphaHtml.replace(WIDGET_BLOCK_RE, '').replace(MODES_BLOCK_RE, '');
   if (legacyHtml.includes('daily-lesson-chat')) {
     throw new Error(
       'global-setup: stripped gamma copy still contains "daily-lesson-chat" — ' +
         'WIDGET_BLOCK_RE no longer matches the marker block in the rendered page'
+    );
+  }
+  if (legacyHtml.includes('daily-lesson-modes')) {
+    throw new Error(
+      'global-setup: stripped gamma copy still contains "daily-lesson-modes" — ' +
+        'MODES_BLOCK_RE no longer matches the marker block in the rendered page'
     );
   }
   fs.writeFileSync(path.join(LESSONS_HOME, LEGACY_FILE_REL), legacyHtml);

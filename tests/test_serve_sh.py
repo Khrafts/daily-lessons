@@ -89,6 +89,50 @@ class ServeShTests(unittest.TestCase):
             self.assertEqual(len(_pids_on(self.port)), 1,
                              "reuse must not start a second server")
 
+    def test_replaces_stale_version(self):
+        # A server reporting an OLD plugin version is started directly (not via
+        # serve.sh). serve.sh must retire it and bring up the current version.
+        server = REPO / "scripts" / "chat_server.py"
+        stale_env = dict(self.env, DAILY_LESSON_PLUGIN_VERSION="0.0.1-stale")
+        stale = subprocess.Popen(
+            ["python3", str(server), "--port", str(self.port)],
+            env=stale_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(stale.terminate)
+
+        base = "http://127.0.0.1:%d" % self.port
+        for _ in range(40):
+            try:
+                body = urllib.request.urlopen(base + "/api/health", timeout=2).read()
+                if json.loads(body).get("plugin_version") == "0.0.1-stale":
+                    break
+            except Exception:
+                pass
+            time.sleep(0.2)
+        else:
+            self.fail("stale server never came up")
+        stale_pid = stale.pid
+
+        # serve.sh with normal env: should replace the stale instance.
+        r = self._run()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), base)
+
+        # The live server now reports the REAL manifest version, not the stale one.
+        expected = json.loads(
+            (REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+        body = json.loads(urllib.request.urlopen(base + "/api/health", timeout=3).read())
+        self.assertEqual(body["plugin_version"], expected)
+        self.assertNotEqual(body["pid"], stale_pid)
+
+        # The stale process is gone, and exactly one listener remains.
+        for _ in range(20):
+            if stale.poll() is not None:
+                break
+            time.sleep(0.1)
+        self.assertIsNotNone(stale.poll(), "stale server was not killed")
+        if shutil.which("lsof"):
+            self.assertEqual(len(_pids_on(self.port)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

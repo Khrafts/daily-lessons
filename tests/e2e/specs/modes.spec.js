@@ -22,12 +22,14 @@ test.describe('lesson tone bar', () => {
     ).toHaveText(/Original/);
     await expect(page.getByTestId('modes-generate')).toHaveCount(4);
 
-    // Generate the Tutorial rendition (mock backend → instant) and follow it.
+    // Generate the Tutorial rendition: a confirmation modal appears first.
     await page
       .getByTestId('modes-generate')
       .filter({ hasText: 'Tutorial' })
       .first()
       .click();
+    await expect(page.getByTestId('modes-confirm')).toBeVisible();
+    await page.getByTestId('modes-confirm-go').click();
     await page.waitForURL(/fixture-alpha-tutorial\.html/, { timeout: 20000 });
 
     // On the new rendition, Tutorial is the current tone…
@@ -51,5 +53,45 @@ test.describe('lesson tone bar', () => {
     await expect(
       page.getByTestId('modes-tone').filter({ hasText: 'Tutorial' })
     ).toHaveCount(1);
+  });
+
+  test('confirm modal: cancel, remember choice, and reset', async ({ page }) => {
+    await page.goto('/' + ALPHA);
+    await expect(page.getByTestId('modes-bar')).toBeVisible();
+
+    // Count recast attempts; abort them so no page navigation happens.
+    let recastCalls = 0;
+    await page.route('**/api/recast', (route) => {
+      recastCalls += 1;
+      route.abort();
+    });
+
+    const dlg = page.getByTestId('modes-confirm');
+
+    // Cancel does NOT start a recast.
+    await page.getByTestId('modes-generate').filter({ hasText: 'Grounded' }).first().click();
+    await expect(dlg).toBeVisible();
+    await page.getByTestId('modes-confirm-cancel').click();
+    await expect(dlg).toBeHidden();
+    expect(recastCalls).toBe(0);
+
+    // Opt out: check "Don't ask again" and confirm → recast attempted, reset shows.
+    await page.getByTestId('modes-generate').filter({ hasText: 'Grounded' }).first().click();
+    await expect(dlg).toBeVisible();
+    await page.getByTestId('modes-confirm-skip').check();
+    await page.getByTestId('modes-confirm-go').click();
+    await expect.poll(() => recastCalls).toBe(1);
+    await expect(page.getByTestId('modes-reset')).toBeVisible();
+
+    // Choice remembered: the next generate skips the dialog entirely.
+    await page.getByTestId('modes-generate').filter({ hasText: 'Deep Dive' }).first().click();
+    await expect.poll(() => recastCalls).toBe(2);
+    await expect(dlg).toBeHidden();
+
+    // Reset re-enables the prompt.
+    await page.getByTestId('modes-reset').click();
+    await expect(page.getByTestId('modes-reset')).toBeHidden();
+    await page.getByTestId('modes-generate').filter({ hasText: 'Deep Dive' }).first().click();
+    await expect(dlg).toBeVisible();
   });
 });

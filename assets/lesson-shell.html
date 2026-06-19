@@ -957,13 +957,66 @@
   @keyframes dlm-rot{to{transform:rotate(360deg)}}
   @media (prefers-reduced-motion:reduce){.dlm-spin{animation:none}}
   @media print{#dlm-bar{display:none !important}}
+  /* confirm-before-generate modal + reset affordance */
+  .dlm-reset{
+    border:0;background:none;cursor:pointer;padding:0;margin-left:.2rem;
+    color:var(--muted,#6b6b6b);font:inherit;letter-spacing:inherit;text-transform:inherit;
+    text-decoration:underline;text-underline-offset:2px;
+  }
+  .dlm-reset:hover{color:var(--ink,#111)}
+  .dlm-reset[hidden]{display:none}
+  .dlm-confirm{
+    border:1px solid var(--line,#e6e6e6);border-radius:12px;padding:0;
+    max-width:30rem;width:calc(100% - 2rem);
+    color:var(--ink,#111);background:var(--paper,#fff);
+    box-shadow:0 12px 40px rgba(0,0,0,.18);
+  }
+  .dlm-confirm::backdrop{background:rgba(0,0,0,.32)}
+  .dlm-confirm-inner{padding:1.4rem 1.5rem 1.2rem}
+  .dlm-confirm-title{
+    margin:0 0 .6rem;font-family:Fraunces,"Iowan Old Style",Georgia,serif;
+    font-size:1.18rem;font-weight:600;letter-spacing:0;text-transform:none;
+  }
+  .dlm-confirm-body{
+    margin:0 0 1rem;font-family:Fraunces,"Iowan Old Style",Georgia,serif;
+    font-size:.95rem;line-height:1.5;letter-spacing:0;text-transform:none;color:var(--ink,#111);
+  }
+  .dlm-confirm-body code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em}
+  .dlm-confirm-skip{
+    display:flex;align-items:center;gap:.45rem;margin:0 0 1.2rem;cursor:pointer;
+    font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.7rem;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--muted,#6b6b6b);
+  }
+  .dlm-confirm-actions{display:flex;justify-content:flex-end;gap:.6rem}
+  .dlm-btn{
+    font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;
+    border:1px solid var(--line,#e6e6e6);border-radius:999px;padding:.4rem .9rem;
+    background:var(--paper,#fff);color:var(--ink,#111);
+  }
+  .dlm-btn-primary{background:var(--ink,#111);color:var(--paper,#fff);border-color:var(--ink,#111)}
+  .dlm-btn-ghost:hover{border-color:var(--ink,#111)}
+  .dlm-btn:focus-visible{outline:2px solid var(--ink,#111);outline-offset:2px}
+  @media print{.dlm-confirm{display:none !important}}
 </style>
 
 <div id="dlm-bar" data-testid="modes-bar" aria-label="Lesson tone" hidden>
   <span class="dlm-label">Tone</span>
   <span class="dlm-tones" data-testid="modes-tones"></span>
   <span class="dlm-status" data-testid="modes-status" role="status" aria-live="polite"></span>
+  <button type="button" class="dlm-reset" data-testid="modes-reset" hidden>Always ask before generating</button>
 </div>
+
+<dialog id="dlm-confirm" class="dlm-confirm" data-testid="modes-confirm" aria-labelledby="dlm-confirm-title">
+  <div class="dlm-confirm-inner">
+    <h2 id="dlm-confirm-title" class="dlm-confirm-title">Generate this tone?</h2>
+    <p class="dlm-confirm-body" data-testid="modes-confirm-body"></p>
+    <label class="dlm-confirm-skip"><input type="checkbox" data-testid="modes-confirm-skip"> Don't ask again</label>
+    <div class="dlm-confirm-actions">
+      <button type="button" class="dlm-btn dlm-btn-ghost" data-testid="modes-confirm-cancel">Cancel</button>
+      <button type="button" class="dlm-btn dlm-btn-primary" data-testid="modes-confirm-go">Generate</button>
+    </div>
+  </div>
+</dialog>
 
 <script>
 (function(){
@@ -981,6 +1034,59 @@
   var file=location.pathname.split('/').pop()||'';
   var lesson='lessons/'+file;
   var busy=false;
+
+  // Self-contained localStorage (the chat IIFE's helpers are out of this scope)
+  // + confirm-before-generate state. SKIP_KEY persists the "don't ask again".
+  function mGet(k){try{return window.localStorage.getItem(k);}catch(e){return null;}}
+  function mSet(k,v){try{window.localStorage.setItem(k,v);}catch(e){}}
+  function mDel(k){try{window.localStorage.removeItem(k);}catch(e){}}
+  var SKIP_KEY='dlm-recast-skip-confirm';
+  var resetBtn=bar.querySelector('.dlm-reset');
+  var dlg=document.getElementById('dlm-confirm');
+  var dlgTitle=dlg?dlg.querySelector('.dlm-confirm-title'):null;
+  var dlgBody=dlg?dlg.querySelector('[data-testid="modes-confirm-body"]'):null;
+  var dlgSkip=dlg?dlg.querySelector('[data-testid="modes-confirm-skip"]'):null;
+  var dlgGo=dlg?dlg.querySelector('[data-testid="modes-confirm-go"]'):null;
+  var dlgCancel=dlg?dlg.querySelector('[data-testid="modes-confirm-cancel"]'):null;
+  var pending=null;
+
+  function syncReset(){ if(resetBtn) resetBtn.hidden = (mGet(SKIP_KEY)!=='1'); }
+  function fillBody(label){
+    if(!dlgBody) return;
+    dlgBody.textContent='';
+    dlgBody.appendChild(document.createTextNode('This runs your local '));
+    var code=document.createElement('code'); code.textContent='claude';
+    dlgBody.appendChild(code);
+    dlgBody.appendChild(document.createTextNode(' to rewrite this lesson in the '));
+    var strong=document.createElement('strong'); strong.textContent=label;  // escape-first
+    dlgBody.appendChild(strong);
+    dlgBody.appendChild(document.createTextNode(' tone. It can take up to a minute and'
+      +' counts against your Claude usage, like a chat turn. The new tone is saved'
+      +' next to this lesson — nothing leaves your machine.'));
+  }
+  function proceed(){
+    var a=pending; pending=null;
+    if(dlgSkip&&dlgSkip.checked){ mSet(SKIP_KEY,'1'); syncReset(); }
+    if(dlg&&dlg.open){ try{dlg.close();}catch(e){} }
+    if(a) generate(a);
+  }
+  function confirmThenGenerate(a){
+    if(mGet(SKIP_KEY)==='1'){ generate(a); return; }
+    pending=a;
+    if(dlgTitle) dlgTitle.textContent='Generate the '+a.label+' version?';
+    fillBody(a.label);
+    if(dlgSkip) dlgSkip.checked=false;
+    if(dlg&&dlg.showModal){ dlg.showModal(); if(dlgGo) dlgGo.focus(); }
+    else { proceed(); }  // no <dialog> support → just generate
+  }
+  if(dlgGo) dlgGo.addEventListener('click',proceed);
+  if(dlgCancel) dlgCancel.addEventListener('click',function(){ if(dlg&&dlg.open){try{dlg.close();}catch(e){}} });
+  if(dlg){
+    dlg.addEventListener('close',function(){ pending=null; });
+    dlg.addEventListener('click',function(e){ if(e.target===dlg){ try{dlg.close();}catch(_){} } }); // backdrop
+  }
+  if(resetBtn) resetBtn.addEventListener('click',function(){ mDel(SKIP_KEY); syncReset(); });
+  syncReset();
 
   function placeBar(){
     // Sit the bar under the dek; fall back to the top of the article wrapper.
@@ -1017,7 +1123,7 @@
     b.title='Generate this lesson in '+a.label+' mode (runs your local claude)';
     var plus=document.createElement('span'); plus.className='dlm-plus'; plus.textContent='+';
     b.appendChild(plus); b.appendChild(document.createTextNode(' '+a.label));
-    b.addEventListener('click',function(){ generate(a); });
+    b.addEventListener('click',function(){ confirmThenGenerate(a); });
     return b;
   }
   function render(data){
@@ -1026,6 +1132,7 @@
     rends.forEach(function(r){ tones.appendChild(chip(r)); });
     avail.forEach(function(a){ tones.appendChild(genBtn(a)); });
     bar.hidden = !(rends.length || avail.length);
+    syncReset();
   }
   function generate(a){
     if(busy) return; busy=true;

@@ -148,9 +148,15 @@ class HttpApiTests(unittest.TestCase):
     def test_health(self):
         status, headers, data = request(self.port, "GET", "/api/health")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(data),
-                         {"ok": True, "app": "daily-lesson-chat",
-                          "version": 1, "backend": "mock"})
+        body = json.loads(data)
+        self.assertEqual(body["ok"], True)
+        self.assertEqual(body["app"], "daily-lesson-chat")
+        self.assertEqual(body["version"], 1)
+        self.assertEqual(body["backend"], "mock")
+        self.assertIsInstance(body["plugin_version"], str)
+        self.assertTrue(body["plugin_version"])           # never empty
+        self.assertIsInstance(body["pid"], int)
+        self.assertGreater(body["pid"], 0)
         # no Origin (curl) and a file:// page (Origin: null) may read it
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "null")
         _, h_null, _ = request(self.port, "GET", "/api/health",
@@ -1291,6 +1297,21 @@ class WidgetBlockTests(unittest.TestCase):
         finally:
             shutil.rmtree(str(tmp), ignore_errors=True)
 
+    def test_real_shell_carries_chat_and_modes_blocks(self):
+        # The frozen shell must keep BOTH injectable blocks, or serve-time
+        # injection silently no-ops (load_widget_block returns None). This is
+        # unconditional (no skip), so deleting/renaming either marker — or
+        # gutting the modes block's bar/modal — goes RED here.
+        assets = TESTS_DIR.parent / "assets"
+        chat = chat_server.load_widget_block(assets, chat_server.WIDGET_START,
+                                             chat_server.WIDGET_END)
+        modes = chat_server.load_widget_block(assets, chat_server.MODES_START,
+                                              chat_server.MODES_END)
+        self.assertIsNotNone(chat, "chat widget block missing from lesson-shell.html")
+        self.assertIsNotNone(modes, "modes block missing from lesson-shell.html")
+        self.assertIn('data-testid="modes-bar"', modes)   # the tone bar
+        self.assertIn('id="dlm-confirm"', modes)          # the confirm modal
+
 
 class InjectWidgetTests(unittest.TestCase):
     BLOCK = (chat_server.WIDGET_START + "\n<div id=cur></div>\n"
@@ -1322,6 +1343,105 @@ class InjectWidgetTests(unittest.TestCase):
         out = chat_server.inject_widget(page, self.BLOCK)
         self.assertEqual(out, page)
         self.assertEqual(out.decode("utf-8").count(chat_server.WIDGET_START), 1)
+
+
+class InjectModesTests(unittest.TestCase):
+    """The tone/modes block injects exactly like the chat widget — same routine,
+    different markers. _serve_static calls inject_widget for BOTH, so legacy
+    pages gain the tone bar + confirm modal too; this locks that path in."""
+    START = chat_server.MODES_START
+    END = chat_server.MODES_END
+    BLOCK = chat_server.MODES_START + "\n<div id=cur-modes></div>\n" + chat_server.MODES_END
+
+    def _inject(self, page):
+        return chat_server.inject_widget(page, self.BLOCK, self.START, self.END)
+
+    def test_inserts_when_absent(self):
+        out = self._inject(b"<html><body>x</body></html>").decode("utf-8")
+        self.assertEqual(out.count(self.START), 1)
+        self.assertLess(out.find(self.START), out.rfind("</body>"))
+
+    def test_replaces_older_block(self):
+        old = self.START + "\n<div id=old-modes></div>\n" + self.END
+        page = ("<html><body>x\n" + old + "\n</body></html>").encode("utf-8")
+        out = self._inject(page).decode("utf-8")
+        self.assertIn("id=cur-modes", out)
+        self.assertNotIn("id=old-modes", out)
+        self.assertEqual(out.count(self.START), 1)
+
+    def test_identical_block_is_byte_identical(self):
+        page = ("<html><body>x\n" + self.BLOCK + "\n</body></html>").encode("utf-8")
+        self.assertEqual(self._inject(page), page)
+
+    def test_orphan_start_marker_does_not_double_inject(self):
+        page = ("<html><body>x\n" + self.START
+                + "\n<div id=stuck-modes></div>\n</body></html>").encode("utf-8")
+        out = self._inject(page)
+        self.assertEqual(out, page)
+        self.assertEqual(out.decode("utf-8").count(self.START), 1)
+
+
+class ModesInjectionServerTests(unittest.TestCase):
+    """Serve-time integration: a legacy lesson whose on-disk HTML lacks the modes
+    block gets the REAL tone-bar + confirm-modal block (read from the actual
+    assets/lesson-shell.html) injected when served — without rewriting the file.
+    This is the legacy-page guarantee for the modes feature, mirroring
+    HttpApiTests.test_widget_injection for the chat widget."""
+    REAL_ASSETS = TESTS_DIR.parent / "assets"
+
+    @classmethod
+    def setUpClass(cls):
+        if chat_server.load_widget_block(cls.REAL_ASSETS, chat_server.MODES_START,
+                                         chat_server.MODES_END) is None:
+            raise unittest.SkipTest("assets/lesson-shell.html lacks the modes block")
+        cls.tmp = Path(tempfile.mkdtemp(prefix="dlc-modes-"))
+        cls.root = cls.tmp / "library"
+        (cls.root / "lessons").mkdir(parents=True)
+        cls.legacy = "lessons/2026-01-01-legacy.html"
+        cls.legacy_html = ("<!DOCTYPE html><html><body><div class='wrap'>"
+                           "<p class='dek'>d</p><h1>Legacy</h1></div></body></html>")
+        (cls.root / cls.legacy).write_text(cls.legacy_html, encoding="utf-8")
+        cls.stale = "lessons/2026-01-02-stale.html"
+        cls.stale_html = ("<!DOCTYPE html><html><body><div class='wrap'>x\n"
+                          + chat_server.MODES_START + "\n<div id=old-modes></div>\n"
+                          + chat_server.MODES_END + "\n</div></body></html>")
+        (cls.root / cls.stale).write_text(cls.stale_html, encoding="utf-8")
+        cls.srv = chat_server.build_server(0, cls.root, "mock", assets_dir=cls.REAL_ASSETS)
+        cls.port = cls.srv.server_address[1]
+        cls.thread = threading.Thread(target=cls.srv.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.thread.join(timeout=5)
+        cls.srv.server_close()
+        shutil.rmtree(str(cls.tmp), ignore_errors=True)
+
+    def test_legacy_page_gains_modes_block_at_serve_time(self):
+        disk = (self.root / self.legacy).read_bytes()
+        self.assertNotIn(b"daily-lesson-modes:v1", disk)   # absent on disk
+        status, _, served = request(self.port, "GET", "/" + self.legacy)
+        self.assertEqual(status, 200)
+        text = served.decode("utf-8")
+        self.assertEqual(text.count(chat_server.MODES_START), 1)
+        self.assertEqual(text.count(chat_server.MODES_END), 1)
+        # the actual tone bar + confirm modal landed on the legacy page
+        self.assertIn('data-testid="modes-bar"', text)
+        self.assertIn('id="dlm-confirm"', text)
+        self.assertLess(text.find(chat_server.MODES_START), text.rfind("</body>"))
+        # serve-time only: the file on disk is untouched
+        self.assertEqual((self.root / self.legacy).read_bytes(), disk)
+
+    def test_stale_modes_block_is_upgraded(self):
+        status, _, served = request(self.port, "GET", "/" + self.stale)
+        self.assertEqual(status, 200)
+        text = served.decode("utf-8")
+        self.assertEqual(text.count(chat_server.MODES_START), 1)
+        self.assertNotIn("id=old-modes", text)             # stale block replaced
+        self.assertIn('data-testid="modes-bar"', text)
+        self.assertEqual((self.root / self.stale).read_bytes(),
+                         self.stale_html.encode("utf-8"))   # disk untouched
 
 
 if __name__ == "__main__":
