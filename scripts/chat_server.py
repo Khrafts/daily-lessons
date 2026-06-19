@@ -1442,8 +1442,13 @@ class ChatHandler(BaseHTTPRequestHandler):
             rends.append({"mode": m, "label": render_lesson.mode_label(m),
                           "file": f, "url": "/" + str(f),
                           "current": f == lesson})
-        available = [{"mode": m, "label": render_lesson.MODE_LABELS[m]}
-                     for m in order if m not in present]
+        # A recast needs a concept_key (render_lesson --variant keys the new tone
+        # to it). A legacy/pre-modes record without one can still be switched
+        # between any tones it already has, but we don't OFFER new tones to
+        # generate — pressing one would fail at render time.
+        can_recast = bool(group["primary"].get("concept_key"))
+        available = ([{"mode": m, "label": render_lesson.MODE_LABELS[m]}
+                      for m in order if m not in present] if can_recast else [])
         current = next((x["mode"] for x in rends if x["current"]), None)
         self._send_json(200, {"ok": True, "lesson": lesson,
                               "concept_key": group["primary"].get("concept_key"),
@@ -1477,6 +1482,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         group = rendition_group(self.server.lessons_dir, lesson)
         if group is None:
             return self._send_json(404, {"ok": False, "error": "lesson not in the library ledger"})
+        if not group["primary"].get("concept_key"):
+            # legacy/pre-modes record: --variant has no concept to attach the new
+            # tone to, so a recast would die at render time. Reject up front.
+            return self._send_json(422, {"ok": False,
+                                         "error": "this lesson can't be recast (no concept key)"})
         hit = existing_in(group)  # fast path: tone already present (no lock needed)
         if hit:
             return already(hit)

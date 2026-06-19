@@ -185,6 +185,70 @@ class RecastApiTests(unittest.TestCase):
         self.assertIn("legit paragraph", page)
 
 
+class LegacyRecastGuardTests(unittest.TestCase):
+    """A legacy ledger record with no concept_key can't be recast (render_lesson
+    --variant needs a concept_key, exit 2). The server must not OFFER generate
+    buttons for it (renditions: available == []) and must reject a direct recast
+    cleanly (422) rather than letting it blow up at render time."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="dlc-legacy-"))
+        self.root = self.tmp / "library"
+        (self.root / "lessons").mkdir(parents=True)
+        self.file = "lessons/2026-01-01-legacy.html"
+        # A pre-modes lesson page on disk + a ledger record with NO concept_key
+        # and NO mode — exactly what an old install carries.
+        (self.root / self.file).write_text(
+            "<!DOCTYPE html><html><body><div class='wrap'>"
+            "<p class='dek'>old</p><h1>Legacy</h1></div></body></html>",
+            encoding="utf-8")
+        (self.root / "index.json").write_text(
+            json.dumps([{"file": self.file, "title": "Legacy concept",
+                         "one_liner": "from before modes", "tags": ["old"]}]),
+            encoding="utf-8")
+        self.srv = chat_server.build_server(0, self.root, "mock", assets_dir=ASSETS)
+        self.port = self.srv.server_address[1]
+        self.thread = threading.Thread(target=self.srv.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.thread.join(timeout=5)
+        self.srv.server_close()
+        shutil.rmtree(str(self.tmp), ignore_errors=True)
+
+    def _get_json(self, path):
+        status, _, data = request(self.port, "GET", path)
+        return status, json.loads(data)
+
+    def _post_json(self, path, payload):
+        status, _, data = request(self.port, "POST", path,
+                                  body=json.dumps(payload), headers=ORIGIN_HDR)
+        return status, json.loads(data)
+
+    def test_renditions_offers_no_generate_buttons(self):
+        status, j = self._get_json("/api/renditions?lesson=" + self.file)
+        self.assertEqual(status, 200, j)
+        self.assertTrue(j["ok"])
+        self.assertIsNone(j["concept_key"])
+        # The "Original" tone still shows as a switch chip…
+        self.assertEqual(len(j["renditions"]), 1)
+        self.assertEqual(j["renditions"][0]["label"], "Original")
+        # …but no tone is offered to generate (can't recast without a concept_key).
+        self.assertEqual(j["available"], [])
+
+    def test_recast_rejected_cleanly(self):
+        status, j = self._post_json("/api/recast",
+                                    {"lesson": self.file, "mode": "tutorial"})
+        self.assertEqual(status, 422, j)
+        self.assertFalse(j["ok"])
+        self.assertIn("concept key", j["error"].lower())
+        # And nothing was written — no new rendition file leaked into the library.
+        extra = [p for p in (self.root / "lessons").iterdir()
+                 if p.name != "2026-01-01-legacy.html"]
+        self.assertEqual(extra, [])
+
+
 class SanitizeHtmlTests(unittest.TestCase):
     """Unit coverage for strip_unsafe_html — the scrub applied to model output."""
 
