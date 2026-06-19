@@ -1297,6 +1297,21 @@ class WidgetBlockTests(unittest.TestCase):
         finally:
             shutil.rmtree(str(tmp), ignore_errors=True)
 
+    def test_real_shell_carries_chat_and_modes_blocks(self):
+        # The frozen shell must keep BOTH injectable blocks, or serve-time
+        # injection silently no-ops (load_widget_block returns None). This is
+        # unconditional (no skip), so deleting/renaming either marker — or
+        # gutting the modes block's bar/modal — goes RED here.
+        assets = TESTS_DIR.parent / "assets"
+        chat = chat_server.load_widget_block(assets, chat_server.WIDGET_START,
+                                             chat_server.WIDGET_END)
+        modes = chat_server.load_widget_block(assets, chat_server.MODES_START,
+                                              chat_server.MODES_END)
+        self.assertIsNotNone(chat, "chat widget block missing from lesson-shell.html")
+        self.assertIsNotNone(modes, "modes block missing from lesson-shell.html")
+        self.assertIn('data-testid="modes-bar"', modes)   # the tone bar
+        self.assertIn('id="dlm-confirm"', modes)          # the confirm modal
+
 
 class InjectWidgetTests(unittest.TestCase):
     BLOCK = (chat_server.WIDGET_START + "\n<div id=cur></div>\n"
